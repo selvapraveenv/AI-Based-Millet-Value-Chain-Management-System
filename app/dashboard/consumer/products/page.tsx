@@ -9,7 +9,7 @@ import { Badge } from "@/components/ui/badge"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
 import { Label } from "@/components/ui/label"
 import { toast } from "sonner"
-import { getVerifiedListings, createOrder } from "@/lib/firestore"
+import { getVerifiedListings, createOrder, updateListing } from "@/lib/firestore"
 import { getLoggedInUser } from "@/lib/auth"
 
 export default function BrowseCropsPage() {
@@ -68,9 +68,16 @@ export default function BrowseCropsPage() {
         status: "placed",
         deliveryAddress: "Demo Address, Bangalore",
       })
+      
+      // Update the listing quantity after successful order
+      const remainingQuantity = selectedCrop.quantity - qty
+      await updateListing(selectedCrop.id, { quantity: remainingQuantity })
+      
       toast.success("Order placed successfully!")
       setSelectedCrop(null)
       setBuyQuantity("")
+      
+      // Refresh listings - this will automatically filter out zero-quantity items
       const updated = await getVerifiedListings()
       setCrops(updated)
     } catch (error) {

@@ -265,10 +265,14 @@ export async function getSHGDashboardStats(shgId: string, taluks: string[]) {
 export async function getVerifiedListings(): Promise<Listing[]> {
   try {
     const snap = await getDocs(query(collection(db, 'listings'), where('verificationStatus', '==', 'verified'), where('status', '==', 'active')));
-    return snap.docs.map(d => ({ id: d.id, ...d.data() } as Listing));
+    return snap.docs
+      .map(d => ({ id: d.id, ...d.data() } as Listing))
+      .filter(l => l.quantity && l.quantity > 0);
   } catch {
     const snap = await getDocs(collection(db, 'listings'));
-    return snap.docs.map(d => ({ id: d.id, ...d.data() } as Listing)).filter(l => l.verificationStatus === 'verified' && l.status === 'active');
+    return snap.docs
+      .map(d => ({ id: d.id, ...d.data() } as Listing))
+      .filter(l => l.verificationStatus === 'verified' && l.status === 'active' && l.quantity && l.quantity > 0);
   }
 }
 
