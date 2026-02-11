@@ -192,9 +192,11 @@ export async function getFarmerPaymentStats(farmerId: string) {
 export async function getPendingVerifications(taluks: string[]): Promise<Listing[]> {
   try {
     const snap = await getDocs(collection(db, 'listings'));
+    // Normalize taluks for case-insensitive comparison
+    const normalizedTaluks = taluks.map(t => t.toLowerCase().trim());
     return snap.docs
       .map(d => ({ id: d.id, ...d.data() } as Listing))
-      .filter(l => l.verificationStatus === 'pending' && taluks.includes(l.taluk));
+      .filter(l => l.verificationStatus === 'pending' && l.taluk && normalizedTaluks.includes(l.taluk.toLowerCase().trim()));
   } catch {
     return [];
   }
