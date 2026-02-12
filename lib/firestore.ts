@@ -103,6 +103,14 @@ export interface UserDoc {
 }
 
 // ============================================
+// CREATE USER
+// ============================================
+export async function createUser(data: Omit<UserDoc, 'id' | 'createdAt'>): Promise<string> {
+  const ref = await addDoc(collection(db, 'users'), { ...data, createdAt: serverTimestamp() });
+  return ref.id;
+}
+
+// ============================================
 // FARMER FUNCTIONS
 // ============================================
 

@@ -19,6 +19,7 @@ import {
   ClipboardCheck,
   CheckSquare,
   BarChart3,
+  UserPlus,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
@@ -177,6 +178,7 @@ function getNavItems(role: string) {
     admin: [
       { href: `/dashboard/admin`, label: "Overview", icon: Home },
       { href: `/dashboard/admin/users`, label: "User Management", icon: Users },
+      { href: `/dashboard/admin/add-shg`, label: "Add SHG", icon: UserPlus },
       { href: `/dashboard/admin/quality`, label: "SHG-Taluk Assignment", icon: MapPin },
       { href: `/dashboard/admin/batches`, label: "Disputes", icon: ClipboardCheck },
       { href: `/dashboard/admin/analytics`, label: "Analytics", icon: BarChart3 },
