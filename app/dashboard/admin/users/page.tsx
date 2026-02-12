@@ -1,25 +1,20 @@
 ﻿"use client"
 
 import { useState, useEffect } from "react"
-import { Loader2, Search, Trash2, Edit } from "lucide-react"
+import { Loader2, Search, Trash2, Circle } from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
-import { Label } from "@/components/ui/label"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { toast } from "sonner"
-import { getAllUsers, updateUser, deleteUserDoc, type UserDoc } from "@/lib/firestore"
+import { getAllUsers, deleteUserDoc, type UserDoc } from "@/lib/firestore"
 
 export default function AdminUsersPage() {
   const [users, setUsers] = useState<UserDoc[]>([])
   const [loading, setLoading] = useState(true)
   const [searchTerm, setSearchTerm] = useState("")
   const [roleFilter, setRoleFilter] = useState("all")
-  const [editingUser, setEditingUser] = useState<UserDoc | null>(null)
-  const [editStatus, setEditStatus] = useState("")
 
   useEffect(() => {
     async function fetchUsers() {
@@ -35,18 +30,6 @@ export default function AdminUsersPage() {
     fetchUsers()
   }, [])
 
-  async function handleUpdate() {
-    if (!editingUser) return
-    try {
-      await updateUser(editingUser.id!, { status: editStatus })
-      toast.success("User status updated")
-      setEditingUser(null)
-      const data = await getAllUsers()
-      setUsers(data)
-    } catch (error) {
-      toast.error("Failed to update user")
-    }
-  }
 
   async function handleDelete(userId: string) {
     if (!confirm("Are you sure you want to delete this user?")) return
@@ -88,21 +71,9 @@ export default function AdminUsersPage() {
                   <TableCell className="text-muted-foreground">{user.email}</TableCell>
                   <TableCell><Badge variant="outline">{user.role}</Badge></TableCell>
                   <TableCell className="text-muted-foreground">{user.district || "N/A"}</TableCell>
-                  <TableCell><Badge className={user.status === "active" ? "bg-green-500 text-white hover:bg-green-600" : "bg-red-500 text-white hover:bg-red-600"}>{user.status || "active"}</Badge></TableCell>
+                  <TableCell><Circle className="h-3 w-3 fill-green-500 text-green-500" /></TableCell>
                   <TableCell>
                     <div className="flex gap-2">
-                      <Dialog>
-                        <DialogTrigger asChild><Button variant="outline" size="sm" onClick={() => { setEditingUser(user); setEditStatus(user.status || "active") }}><Edit className="h-4 w-4" /></Button></DialogTrigger>
-                        <DialogContent>
-                          <DialogHeader><DialogTitle>Edit User Status</DialogTitle><DialogDescription>Update {user.name}'s account status</DialogDescription></DialogHeader>
-                          <div className="space-y-4 py-4">
-                            <div className="space-y-2"><Label>Name</Label><p className="text-sm text-muted-foreground font-medium">{user.name}</p></div>
-                            <div className="space-y-2"><Label>Role</Label><p className="text-sm text-muted-foreground font-medium">{user.role}</p></div>
-                            <div className="space-y-2"><Label>Status</Label><Select value={editStatus} onValueChange={setEditStatus}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="active">Active</SelectItem><SelectItem value="suspended">Suspended</SelectItem></SelectContent></Select></div>
-                          </div>
-                          <DialogFooter><Button onClick={handleUpdate}>Save Changes</Button></DialogFooter>
-                        </DialogContent>
-                      </Dialog>
                       {user.role !== "admin" && <Button variant="destructive" size="sm" onClick={() => handleDelete(user.id!)}><Trash2 className="h-4 w-4" /></Button>}
                     </div>
                   </TableCell>
