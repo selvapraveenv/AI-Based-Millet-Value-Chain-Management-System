@@ -79,6 +79,7 @@ export interface Dispute {
   description: string;
   status: 'open' | 'in_progress' | 'resolved' | 'closed';
   priority: 'low' | 'medium' | 'high';
+  proofVideoUrl?: string;
   createdAt: any;
   resolvedAt: any;
   resolution: string;
@@ -377,6 +378,26 @@ export async function getAllDisputes(): Promise<Dispute[]> {
 
 export async function updateDispute(id: string, data: Partial<Dispute>): Promise<void> {
   await updateDoc(doc(db, 'disputes', id), data as any);
+}
+
+export async function createDispute(data: Omit<Dispute, 'id' | 'createdAt' | 'resolvedAt' | 'resolution' | 'status'>  & { proofVideoUrl?: string }): Promise<string> {
+  const docRef = await addDoc(collection(db, 'disputes'), {
+    ...data,
+    status: 'open',
+    resolution: '',
+    resolvedAt: null,
+    createdAt: serverTimestamp(),
+  });
+  return docRef.id;
+}
+
+export async function uploadDisputeProof(file: File, disputeId: string): Promise<string> {
+  const { ref, uploadBytes, getDownloadURL } = await import('firebase/storage');
+  const { storage } = await import('./firebase');
+  const storageRef = ref(storage, `dispute-proofs/${disputeId}/${file.name}`);
+  await uploadBytes(storageRef, file);
+  const url = await getDownloadURL(storageRef);
+  return url;
 }
 
 export async function getAdminDashboardStats() {
