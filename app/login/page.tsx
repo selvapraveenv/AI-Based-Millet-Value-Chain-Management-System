@@ -10,8 +10,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { collection, query, where, getDocs } from "firebase/firestore"
-import { db } from "@/lib/firebase"
+import { buildBackendUrl } from "@/lib/api"
 
 export default function LoginPage() {
   const router = useRouter()
@@ -32,34 +31,28 @@ export default function LoginPage() {
     setIsLoading(true)
 
     try {
-      // Check if input is email or phone
-      const isEmail = emailOrPhone.includes("@")
-      const field = isEmail ? "email" : "phone"
+      const response = await fetch(buildBackendUrl("/api/auth/login"), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          emailOrPhone: emailOrPhone.trim(),
+          password,
+        }),
+      })
 
-      // Query Firestore users collection
-      const usersRef = collection(db, "users")
-      const q = query(usersRef, where(field, "==", emailOrPhone))
-      const snapshot = await getDocs(q)
+      const payload = await response.json()
 
-      if (snapshot.empty) {
-        setError("No account found with this " + (isEmail ? "email" : "phone number"))
-        setIsLoading(false)
+      if (!response.ok) {
+        setError(payload?.message || "Something went wrong. Please try again.")
         return
       }
 
-      const userDoc = snapshot.docs[0]
-      const userData = userDoc.data()
+      const userData = payload.user
 
-      // Check password
-      if (userData.password !== password) {
-        setError("Incorrect password")
-        setIsLoading(false)
-        return
-      }
-
-      // Store user info in localStorage for session
-      localStorage.setItem("user", JSON.stringify({
-        id: userDoc.id,
+      let authenticatedUser = {
+        id: userData.id,
         name: userData.name,
         phone: userData.phone,
         email: userData.email,
@@ -68,10 +61,38 @@ export default function LoginPage() {
         state: userData.state,
         taluk: userData.taluk || "",
         assignedTaluks: userData.assignedTaluks || [],
-      }))
+      }
+
+      try {
+        const profileResponse = await fetch(buildBackendUrl(`/api/users/${userData.id}`))
+        const profilePayload = await profileResponse.json()
+
+        if (profileResponse.ok && profilePayload?.success && profilePayload?.user) {
+          const profile = profilePayload.user
+          authenticatedUser = {
+            id: profile.id,
+            name: profile.name || userData.name,
+            phone: profile.phone || userData.phone,
+            email: profile.email || userData.email,
+            role: profile.role || userData.role,
+            district: profile.district || userData.district,
+            state: profile.state || userData.state,
+            taluk: profile.taluk || "",
+            assignedTaluks: profile.assignedTaluks || [],
+          }
+        }
+      } catch (profileError) {
+        console.warn("Failed to refresh profile after login, using login payload", profileError)
+      }
+
+      // Store authenticated user info in localStorage for session
+      localStorage.setItem("user", JSON.stringify(authenticatedUser))
+
+      // Notify listeners in current tab that auth user changed
+      window.dispatchEvent(new Event("focus"))
 
       // Redirect based on role
-      router.push(`/dashboard/${userData.role}`)
+      router.push(`/dashboard/${authenticatedUser.role}`)
     } catch (err: any) {
       console.error("Login error:", err)
       setError("Something went wrong. Please try again.")

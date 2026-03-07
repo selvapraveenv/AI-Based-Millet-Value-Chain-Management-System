@@ -1,9 +1,9 @@
 ﻿"use client"
 
 import { useState, useEffect } from "react"
-import { Loader2, TrendingUp, Users, ShieldCheck, ShoppingBag, IndianRupee } from "lucide-react"
+import { Loader2, TrendingUp, Users, ShieldCheck, ShoppingBag, IndianRupee, CreditCard } from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { getAnalyticsData } from "@/lib/firestore"
+import { buildBackendUrl } from "@/lib/api"
 import { Bar, BarChart, Line, LineChart, Pie, PieChart, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts"
 
 export default function AnalyticsPage() {
@@ -13,8 +13,11 @@ export default function AnalyticsPage() {
   useEffect(() => {
     async function fetchData() {
       try {
-        const d = await getAnalyticsData()
-        setData(d)
+        const response = await fetch(buildBackendUrl("/api/admin/analytics"))
+        const payload = await response.json()
+        if (response.ok && payload?.success) {
+          setData(payload.analytics)
+        }
       } catch (error) {
         console.error("Error:", error)
       } finally {
@@ -33,7 +36,7 @@ export default function AnalyticsPage() {
   return (
     <div className="space-y-8">
       <div><h1 className="text-3xl font-bold text-foreground">Analytics</h1><p className="text-muted-foreground">Platform performance and insights</p></div>
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
         <Card className="border-border">
           <CardHeader className="flex flex-row items-center justify-between pb-2"><CardTitle className="text-sm font-medium text-muted-foreground">Total Revenue</CardTitle><IndianRupee className="h-4 w-4 text-muted-foreground" /></CardHeader>
           <CardContent><div className="text-2xl font-bold text-foreground">Rs {data.totalRevenue.toLocaleString()}</div><p className="text-xs text-primary flex items-center gap-1"><TrendingUp className="h-3 w-3" /> +{data.revenueGrowth}%</p></CardContent>
@@ -49,6 +52,14 @@ export default function AnalyticsPage() {
         <Card className="border-border">
           <CardHeader className="flex flex-row items-center justify-between pb-2"><CardTitle className="text-sm font-medium text-muted-foreground">Total Orders</CardTitle><ShoppingBag className="h-4 w-4 text-muted-foreground" /></CardHeader>
           <CardContent><div className="text-2xl font-bold text-foreground">{data.totalOrders}</div><p className="text-xs text-primary flex items-center gap-1"><TrendingUp className="h-3 w-3" /> +{data.orderGrowth}%</p></CardContent>
+        </Card>
+        <Card className="border-border">
+          <CardHeader className="flex flex-row items-center justify-between pb-2"><CardTitle className="text-sm font-medium text-muted-foreground">Payment Transactions</CardTitle><CreditCard className="h-4 w-4 text-muted-foreground" /></CardHeader>
+          <CardContent><div className="text-2xl font-bold text-foreground">{data.totalPayments || 0}</div><p className="text-xs text-muted-foreground">Completed: {data.completedPayments || 0}</p></CardContent>
+        </Card>
+        <Card className="border-border">
+          <CardHeader className="flex flex-row items-center justify-between pb-2"><CardTitle className="text-sm font-medium text-muted-foreground">Pending Payments</CardTitle><CreditCard className="h-4 w-4 text-muted-foreground" /></CardHeader>
+          <CardContent><div className="text-2xl font-bold text-foreground">{data.pendingPayments || 0}</div><p className="text-xs text-muted-foreground">Awaiting completion</p></CardContent>
         </Card>
       </div>
       <div className="grid gap-6 lg:grid-cols-2">

@@ -9,8 +9,8 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Di
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Badge } from "@/components/ui/badge"
-import { getPendingVerifications, verifyListing } from "@/lib/firestore"
 import { getLoggedInUser } from "@/lib/auth"
+import { buildBackendUrl } from "@/lib/api"
 
 export default function SHGPendingVerifications() {
   const [listings, setListings] = useState<any[]>([])
@@ -25,7 +25,14 @@ export default function SHGPendingVerifications() {
   useEffect(() => {
     async function fetchData() {
       try {
-        const data = await getPendingVerifications(taluks)
+        const taluksQuery = encodeURIComponent((taluks || []).join(","))
+        const response = await fetch(buildBackendUrl(`/api/listings/pending?taluks=${taluksQuery}`))
+        const payload = await response.json()
+        const data = response.ok && payload?.success ? payload.listings || [] : []
+        console.log("SHG pending verifications fetched:", data.length, "items")
+        if (data.length > 0) {
+          console.log("Sample pending listing:", data[0])
+        }
         setListings(data)
       } catch (error) {
         console.error("Error:", error)
@@ -39,7 +46,18 @@ export default function SHGPendingVerifications() {
   const handleVerify = async (listing: any, status: "verified" | "rejected") => {
     if (!user) return
     try {
-      await verifyListing(listing.id, user.id, user.name, status, verifyNotes, imageUrl || "/placeholder.jpg", listing.farmerName, listing.milletType, listing.quantity, listing.taluk, listing.farmerId)
+      const response = await fetch(buildBackendUrl(`/api/listings/${listing.id}/verify`), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          shgId: user.id,
+          shgName: user.name,
+          status,
+          notes: verifyNotes,
+          imageUrl: imageUrl || "/placeholder.jpg",
+        }),
+      })
+      if (!response.ok) throw new Error("Verification failed")
       setListings(listings.filter(l => l.id !== listing.id))
       setVerifyNotes("")
       setImageUrl("")
@@ -86,7 +104,7 @@ export default function SHGPendingVerifications() {
                     <CardTitle className="text-lg text-foreground">{listing.milletType}</CardTitle>
                     <CardDescription className="flex items-center gap-1 mt-1"><MapPin className="h-3 w-3" />{listing.location} ({listing.taluk})</CardDescription>
                   </div>
-                  <Badge className="bg-accent text-accent-foreground">Pending</Badge>
+                  <Badge className="bg-yellow-100 text-yellow-700 border border-yellow-300">Pending</Badge>
                 </div>
               </CardHeader>
               <CardContent>

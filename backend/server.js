@@ -13,12 +13,26 @@
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
+import multer from "multer";
+import path from "path";
 import { initializeFirebase } from "./config/firebase.js";
 
 // Import route handlers
 import aiRoutes from "./routes/ai.routes.js";
 import orderRoutes from "./routes/order.routes.js";
 import traceabilityRoutes from "./routes/traceability.routes.js";
+import marketInsightsRoutes from "./routes/market-insights.routes.js";
+import authRoutes from "./routes/auth.routes.js";
+import listingsRoutes from "./routes/listings.routes.js";
+import usersRoutes from "./routes/users.routes.js";
+import adminRoutes from "./routes/admin.routes.js";
+import disputesRoutes from "./routes/disputes.routes.js";
+import verificationsRoutes from "./routes/verifications.routes.js";
+import paymentsRoutes from "./routes/payments.routes.js";
+import maintenanceRoutes from "./routes/maintenance.routes.js";
+import fixNamesRoutes from "./routes/fix-names.routes.js";
+import inspectRoutes from "./routes/inspect.routes.js";
+import fixDataRoutes from "./routes/fix-data.routes.js";
 
 // Load environment variables
 dotenv.config();
@@ -27,10 +41,31 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 5000;
 
+// Configure multer for file uploads (store in memory for Firebase upload)
+const uploadMemory = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 30 * 1024 * 1024, // 30MB limit for dispute attachments
+  },
+  fileFilter: (req, file, cb) => {
+    // Accept common dispute proof attachments
+    if (
+      file.mimetype.startsWith("video/") ||
+      file.mimetype.startsWith("image/") ||
+      file.mimetype === "application/pdf"
+    ) {
+      cb(null, true);
+    } else {
+      cb(new Error("Only video, image, or PDF files are allowed"), false);
+    }
+  },
+});
+
 // Middleware
 app.use(cors()); // Allow cross-origin requests from Next.js frontend
-app.use(express.json()); // Parse JSON request bodies
-app.use(express.urlencoded({ extended: true })); // Parse URL-encoded bodies
+app.use(express.json({ limit: "50mb" })); // Parse JSON request bodies
+app.use(express.urlencoded({ extended: true, limit: "50mb" })); // Parse URL-encoded bodies
+app.use("/uploads", express.static(path.join(process.cwd(), "uploads")));
 
 // Request logging middleware
 app.use((req, res, next) => {
@@ -55,6 +90,18 @@ app.get("/health", (req, res) => {
 app.use("/api/ai", aiRoutes);
 app.use("/api/orders", orderRoutes);
 app.use("/api/traceability", traceabilityRoutes);
+app.use("/api/market-insights", marketInsightsRoutes);
+app.use("/api/auth", authRoutes);
+app.use("/api/listings", listingsRoutes);
+app.use("/api/users", usersRoutes);
+app.use("/api/admin", adminRoutes);
+app.use("/api/disputes", uploadMemory.single("proofVideo"), disputesRoutes);
+app.use("/api/verifications", verificationsRoutes);
+app.use("/api/payments", paymentsRoutes);
+app.use("/api/maintenance", maintenanceRoutes);
+app.use("/api/fix", fixNamesRoutes);
+app.use("/api/inspect", inspectRoutes);
+app.use("/api/data-fix", fixDataRoutes);
 
 // 404 Handler
 app.use((req, res) => {
@@ -86,10 +133,16 @@ app.listen(PORT, () => {
   console.log(`📡 Health check: http://localhost:${PORT}/health`);
   console.log("");
   console.log("Available endpoints:");
+  console.log("  POST /api/ai/smart-match");
   console.log("  POST /api/ai/price-suggestion");
   console.log("  GET  /api/ai/demand-forecast");
   console.log("  POST /api/ai/quality-check");
   console.log("  POST /api/orders/update-status");
   console.log("  GET  /api/traceability/:batchId");
+  console.log("  GET  /api/market-insights");
+  console.log("  GET  /api/market-insights/trending");
+  console.log("  GET  /api/market-insights/top-trades");
+  console.log("  GET  /api/market-insights/price-analysis");
+  console.log("  POST /api/auth/login");
   console.log("═══════════════════════════════════════════════════════");
 });

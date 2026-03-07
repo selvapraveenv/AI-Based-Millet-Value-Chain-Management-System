@@ -1,6 +1,6 @@
 ﻿"use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useMemo } from "react"
 import { Plus, Edit, Trash2, Loader2, Package, CheckCircle, Clock, XCircle } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -8,9 +8,10 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog"
 import { Badge } from "@/components/ui/badge"
-import { getListingsByFarmer, createListing, deleteListing, updateListing } from "@/lib/firestore"
 import { getLoggedInUser } from "@/lib/auth"
+import { buildBackendUrl } from "@/lib/api"
 
 const milletTypes = ["Finger Millet (Ragi)", "Pearl Millet (Bajra)", "Foxtail Millet", "Barnyard Millet", "Little Millet", "Kodo Millet", "Proso Millet", "Sorghum (Jowar)"]
 const taluks = ["Avinashi", "Palladam", "Udumalaipettai", "Dharapuram", "Kangeyam", "Madathukulam", "Uthukuli", "Erode", "Perundurai", "Gobi", "Sathyamangalam", "Bhavani", "Anthiyur", "Kodumudi", "Modakurichi", "Nambiyur", "Thalavadi"]
@@ -23,15 +24,24 @@ export default function FarmerListings() {
   const [editingListing, setEditingListing] = useState<any>(null)
   const [editForm, setEditForm] = useState({ quantity: "", price: "" })
   const [editError, setEditError] = useState("")
-  const [newListing, setNewListing] = useState({ type: "", quantity: "", location: "", price: "", taluk: "" })
+  const [newListing, setNewListing] = useState({ type: "", quantity: "", location: "", price: "", taluk: "", harvestDate: "" })
 
-  const user = getLoggedInUser()
+  const user = useMemo(() => getLoggedInUser(), [])
 
   useEffect(() => {
     async function fetchData() {
       try {
-        if (!user) return
-        const listingsData = await getListingsByFarmer(user.id)
+        if (!user) {
+          setLoading(false)
+          return
+        }
+        const response = await fetch(buildBackendUrl(`/api/listings/farmer/${user.id}`))
+        const payload = await response.json()
+        if (!response.ok) {
+          console.error("Failed to fetch farmer listings:", payload)
+        }
+        const listingsData = response.ok && payload?.success ? payload.listings || [] : []
+        console.log("Fetched farmer listings:", listingsData)
         setListings(listingsData)
       } catch (error) {
         console.error("Error fetching listings:", error)
@@ -41,35 +51,69 @@ export default function FarmerListings() {
       }
     }
     fetchData()
-  }, [])
+  }, [user?.id])
 
   const handleAddListing = async () => {
-    if (!user) return
+    if (!user) {
+      console.error("No user found")
+      return
+    }
     if (newListing.type && newListing.quantity && newListing.location && newListing.price && newListing.taluk) {
       try {
-        const newId = await createListing({
-          farmerId: user.id, farmerName: user.name, farmerPhone: user.phone,
-          milletType: newListing.type, quantity: Number(newListing.quantity), unit: "kg",
-          location: newListing.location, taluk: newListing.taluk, pricePerKg: Number(newListing.price),
-          status: "active", quality: "Grade A", harvestDate: new Date().toISOString().split('T')[0],
-          verificationStatus: "pending", verifiedBy: "", verifiedByName: "",
-          verifiedImage: "", verificationDate: null, verificationNotes: "",
+        console.log("Creating listing with user:", user)
+        const listingData = {
+          farmerId: user.id,
+          farmerName: user.name,
+          farmerPhone: user.phone || "",
+          milletType: newListing.type,
+          quantity: Number(newListing.quantity),
+          unit: "kg",
+          location: newListing.location,
+          taluk: newListing.taluk,
+          pricePerKg: Number(newListing.price),
+          status: "active" as const,
+          quality: "Grade A",
+          harvestDate: newListing.harvestDate || new Date().toISOString().split('T')[0],
+          verificationStatus: "pending" as const,
+          verifiedBy: "",
+          verifiedByName: "",
+          verifiedImage: "",
+          verificationDate: null,
+          verificationNotes: "",
+        }
+        console.log("Listing data to create:", listingData)
+        const response = await fetch(buildBackendUrl("/api/listings"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(listingData),
         })
-        const added = { id: newId, farmerId: user.id, farmerName: user.name, milletType: newListing.type,
-          quantity: Number(newListing.quantity), unit: "kg", location: newListing.location, taluk: newListing.taluk,
-          pricePerKg: Number(newListing.price), status: "active", quality: "Grade A",
-          verificationStatus: "pending", verifiedBy: "", verifiedByName: "", verifiedImage: "", verificationNotes: "" }
+
+        if (!response.ok) {
+          throw new Error("Failed to create listing")
+        }
+
+        const payload = await response.json()
+        const added = payload?.listing || {
+          id: payload?.id,
+          ...listingData,
+        }
         setListings([added, ...listings])
+        setNewListing({ type: "", quantity: "", location: "", price: "", taluk: "", harvestDate: "" })
+        setIsDialogOpen(false)
       } catch (error) {
         console.error("Error creating listing:", error)
       }
-      setNewListing({ type: "", quantity: "", location: "", price: "", taluk: "" })
-      setIsDialogOpen(false)
     }
   }
 
   const handleDeleteListing = async (id: string) => {
-    try { await deleteListing(id) } catch (error) { console.log("Error deleting") }
+    try {
+      await fetch(buildBackendUrl(`/api/listings/${id}?farmerId=${encodeURIComponent(user?.id || "")}`), {
+        method: "DELETE",
+      })
+    } catch (error) {
+      console.log("Error deleting")
+    }
     setListings(listings.filter(l => l.id !== id))
   }
 
@@ -90,7 +134,20 @@ export default function FarmerListings() {
     if (!newPrice || newPrice <= 0) { setEditError("Price must be greater than 0"); return }
 
     try {
-      await updateListing(editingListing.id, { quantity: newQty, pricePerKg: newPrice })
+      const response = await fetch(buildBackendUrl(`/api/listings/${editingListing.id}`), {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          farmerId: user?.id,
+          quantity: newQty,
+          pricePerKg: newPrice,
+        }),
+      })
+
+      if (!response.ok) {
+        throw new Error("Failed to update listing")
+      }
+
       setListings(listings.map(l => l.id === editingListing.id ? { ...l, quantity: newQty, pricePerKg: newPrice } : l))
       setIsEditDialogOpen(false)
       setEditingListing(null)
@@ -102,9 +159,41 @@ export default function FarmerListings() {
   }
 
   const getVerificationBadge = (status: string) => {
-    if (status === "verified") return <Badge className="bg-primary/10 text-primary"><CheckCircle className="mr-1 h-3 w-3" />Verified</Badge>
-    if (status === "rejected") return <Badge variant="destructive"><XCircle className="mr-1 h-3 w-3" />Rejected</Badge>
-    return <Badge className="bg-accent text-accent-foreground"><Clock className="mr-1 h-3 w-3" />Pending</Badge>
+    if (status === "verified") return <Badge className="bg-green-100 text-green-700 border border-green-300"><CheckCircle className="mr-1 h-3 w-3" />Verified</Badge>
+    if (status === "rejected") return <Badge className="bg-red-100 text-red-700 border border-red-300"><XCircle className="mr-1 h-3 w-3" />Rejected</Badge>
+    return <Badge className="bg-yellow-100 text-yellow-700 border border-yellow-300"><Clock className="mr-1 h-3 w-3" />Pending</Badge>
+  }
+
+  const formatDate = (dateString: string | Date) => {
+    if (!dateString) return "N/A"
+    try {
+      // Handle Firestore timestamps with toDate method
+      if (typeof dateString === "object" && dateString?.toDate) {
+        return dateString.toDate().toLocaleDateString()
+      }
+      // Handle ISO strings and date objects
+      const date = typeof dateString === "string" ? new Date(dateString) : dateString
+      if (isNaN(date.getTime())) return "N/A"
+      return date.toLocaleDateString()
+    } catch {
+      return "N/A"
+    }
+  }
+
+  const formatCreatedDate = (timestamp: any) => {
+    if (!timestamp) return "N/A"
+    try {
+      // Handle Firestore timestamps with toDate method
+      if (timestamp?.toDate && typeof timestamp.toDate === "function") {
+        return timestamp.toDate().toLocaleDateString()
+      }
+      // Handle ISO strings and direct date objects
+      const date = typeof timestamp === "string" ? new Date(timestamp) : new Date(timestamp)
+      if (isNaN(date.getTime())) return "N/A"
+      return date.toLocaleDateString()
+    } catch {
+      return "N/A"
+    }
   }
 
   if (loading) {
@@ -112,37 +201,42 @@ export default function FarmerListings() {
   }
 
   return (
-    <div className="space-y-8">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+    <div className="space-y-5 max-w-6xl">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-3xl font-bold text-foreground">My Crop Listings</h1>
           <p className="text-muted-foreground">Manage your millet crop listings. SHGs will verify quality before consumers can buy.</p>
         </div>
         <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
           <DialogTrigger asChild><Button><Plus className="mr-2 h-4 w-4" />Add New Listing</Button></DialogTrigger>
-          <DialogContent className="sm:max-w-md">
+          <DialogContent className="sm:max-w-lg">
             <DialogHeader>
               <DialogTitle>Add New Crop Listing</DialogTitle>
               <DialogDescription>Enter crop details. SHG in your taluk will verify quality.</DialogDescription>
             </DialogHeader>
-            <div className="space-y-4 py-4">
+            <div className="space-y-3 py-3">
               <div className="space-y-2">
                 <Label>Millet Type</Label>
                 <Select value={newListing.type} onValueChange={(v) => setNewListing({ ...newListing, type: v })}>
-                  <SelectTrigger><SelectValue placeholder="Select millet type" /></SelectTrigger>
+                  <SelectTrigger className="h-9"><SelectValue placeholder="Select millet type" /></SelectTrigger>
                   <SelectContent>{milletTypes.map((t) => <SelectItem key={t} value={t}>{t}</SelectItem>)}</SelectContent>
                 </Select>
               </div>
-              <div className="space-y-2"><Label>Quantity (kg)</Label><Input type="number" placeholder="Enter quantity" value={newListing.quantity} onChange={(e) => setNewListing({ ...newListing, quantity: e.target.value })} /></div>
-              <div className="space-y-2"><Label>Location</Label><Input placeholder="Your location" value={newListing.location} onChange={(e) => setNewListing({ ...newListing, location: e.target.value })} /></div>
-              <div className="space-y-2">
-                <Label>Taluk</Label>
-                <Select value={newListing.taluk} onValueChange={(v) => setNewListing({ ...newListing, taluk: v })}>
-                  <SelectTrigger><SelectValue placeholder="Select taluk" /></SelectTrigger>
-                  <SelectContent>{taluks.map((t) => <SelectItem key={t} value={t}>{t}</SelectItem>)}</SelectContent>
-                </Select>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="space-y-2"><Label>Quantity (kg)</Label><Input className="h-9" type="number" placeholder="Enter quantity" value={newListing.quantity} onChange={(e) => setNewListing({ ...newListing, quantity: e.target.value })} /></div>
+                <div className="space-y-2"><Label>Price per kg (Rs)</Label><Input className="h-9" type="number" placeholder="Enter price" value={newListing.price} onChange={(e) => setNewListing({ ...newListing, price: e.target.value })} /></div>
               </div>
-              <div className="space-y-2"><Label>Price per kg (Rs)</Label><Input type="number" placeholder="Enter price" value={newListing.price} onChange={(e) => setNewListing({ ...newListing, price: e.target.value })} /></div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="space-y-2"><Label>Location</Label><Input className="h-9" placeholder="Your location" value={newListing.location} onChange={(e) => setNewListing({ ...newListing, location: e.target.value })} /></div>
+                <div className="space-y-2">
+                  <Label>Taluk</Label>
+                  <Select value={newListing.taluk} onValueChange={(v) => setNewListing({ ...newListing, taluk: v })}>
+                    <SelectTrigger className="h-9"><SelectValue placeholder="Select taluk" /></SelectTrigger>
+                    <SelectContent>{taluks.map((t) => <SelectItem key={t} value={t}>{t}</SelectItem>)}</SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <div className="space-y-2"><Label>Harvest Date</Label><Input className="h-9" type="date" value={newListing.harvestDate} onChange={(e) => setNewListing({ ...newListing, harvestDate: e.target.value })} max={new Date().toISOString().split('T')[0]} /></div>
               <Button onClick={handleAddListing} className="w-full">Add Listing</Button>
             </div>
           </DialogContent>
@@ -202,35 +296,73 @@ export default function FarmerListings() {
           </CardContent>
         </Card>
       ) : (
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+        <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-2 xl:grid-cols-3">
           {listings.map((listing) => (
             <Card key={listing.id} className="border-border">
-              <CardHeader className="pb-3">
+              <CardHeader className="px-3 pt-3 pb-1">
                 <div className="flex items-start justify-between">
-                  <div>
-                    <CardTitle className="text-lg text-foreground">{listing.milletType}</CardTitle>
-                    <CardDescription>{listing.location} ({listing.taluk})</CardDescription>
+                  <div className="flex-1 min-w-0">
+                    <CardTitle className="text-base text-foreground line-clamp-1">{listing.milletType}</CardTitle>
+                    <CardDescription className="text-sm mt-1">Posted {formatCreatedDate(listing.createdAt)}</CardDescription>
                   </div>
                   {getVerificationBadge(listing.verificationStatus)}
                 </div>
               </CardHeader>
-              <CardContent>
-                <div className="space-y-2">
-                  <div className="flex justify-between text-sm"><span className="text-muted-foreground">Quantity:</span><span className="text-foreground font-medium">{listing.quantity} {listing.unit || "kg"}</span></div>
-                  <div className="flex justify-between text-sm"><span className="text-muted-foreground">Price:</span><span className="text-foreground font-medium">Rs {listing.pricePerKg}/kg</span></div>
-                  <div className="flex justify-between text-sm"><span className="text-muted-foreground">Total Value:</span><span className="text-primary font-bold">Rs {listing.quantity * listing.pricePerKg}</span></div>
-                  {listing.verificationStatus === "verified" && listing.verifiedByName && (
-                    <div className="flex justify-between text-sm"><span className="text-muted-foreground">Verified by:</span><span className="text-foreground font-medium">{listing.verifiedByName}</span></div>
-                  )}
-                  {listing.verificationStatus === "rejected" && listing.verificationNotes && (
-                    <div className="mt-2 p-2 bg-destructive/10 rounded text-xs text-destructive">{listing.verificationNotes}</div>
-                  )}
+              <CardContent className="px-3 pt-1 pb-2 space-y-2">
+                <div className="grid grid-cols-2 gap-x-2 gap-y-2 text-sm">
+                  <div><p className="text-muted-foreground">Qty</p><p className="font-semibold text-foreground">{listing.quantity} {listing.unit || "kg"}</p></div>
+                  <div><p className="text-muted-foreground">Rate</p><p className="font-semibold text-primary">{listing.pricePerKg}/kg</p></div>
+                  <div><p className="text-muted-foreground">Total</p><p className="font-semibold text-foreground">{Number(listing.quantity || 0) > 0 && Number(listing.pricePerKg || 0) > 0 ? `Rs ${(Number(listing.quantity) * Number(listing.pricePerKg)).toLocaleString()}` : "—"}</p></div>
+                  <div><p className="text-muted-foreground">Harvest</p><p className="font-semibold text-foreground">{formatDate(listing.harvestDate)}</p></div>
+                  <div><p className="text-muted-foreground">Taluk</p><p className="font-semibold text-foreground">{listing.taluk}</p></div>
+                  <div><p className="text-muted-foreground">Verified By</p><p className="font-semibold text-foreground">{listing.verifiedByName || "—"}</p></div>
                 </div>
-                <div className="flex gap-2 mt-4">
-                  <Button variant="outline" size="sm" className="flex-1 bg-transparent" onClick={() => openEditDialog(listing)}><Edit className="mr-2 h-3 w-3" />Edit</Button>
-                  <Button variant="outline" size="sm" className="text-destructive hover:bg-destructive hover:text-destructive-foreground bg-transparent" onClick={() => handleDeleteListing(listing.id)}><Trash2 className="h-3 w-3" /></Button>
-                </div>
+                {listing.verificationNotes && (
+                  <div className="p-2 rounded border border-border bg-muted/30">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="text-sm text-muted-foreground font-medium">SHG Comments</p>
+                        <p className="text-sm text-foreground truncate">{listing.verificationNotes}</p>
+                      </div>
+                      <Dialog>
+                        <DialogTrigger asChild>
+                          <Button variant="outline" size="sm" className="h-8 px-2 shrink-0">View</Button>
+                        </DialogTrigger>
+                        <DialogContent className="sm:max-w-md">
+                          <DialogHeader>
+                            <DialogTitle>SHG Comments</DialogTitle>
+                          </DialogHeader>
+                          <div className="max-h-72 overflow-y-auto rounded border border-border bg-muted/20 p-3">
+                            <p className="text-sm text-foreground whitespace-pre-wrap">{listing.verificationNotes}</p>
+                          </div>
+                        </DialogContent>
+                      </Dialog>
+                    </div>
+                  </div>
+                )}
               </CardContent>
+              <div className="flex gap-1.5 px-3 pb-2 border-t border-border pt-2">
+                <Button variant="outline" size="sm" className="flex-1" onClick={() => openEditDialog(listing)}>Edit</Button>
+                <AlertDialog>
+                  <AlertDialogTrigger asChild>
+                    <Button variant="destructive" size="sm" className="flex-1">Delete</Button>
+                  </AlertDialogTrigger>
+                  <AlertDialogContent>
+                    <AlertDialogHeader>
+                      <AlertDialogTitle>Delete Listing</AlertDialogTitle>
+                      <AlertDialogDescription>
+                        Are you sure you want to delete this listing for {listing.milletType}? This action cannot be undone.
+                      </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                      <AlertDialogCancel>Cancel</AlertDialogCancel>
+                      <AlertDialogAction onClick={() => handleDeleteListing(listing.id)} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+                        Delete
+                      </AlertDialogAction>
+                    </AlertDialogFooter>
+                  </AlertDialogContent>
+                </AlertDialog>
+              </div>
             </Card>
           ))}
         </div>

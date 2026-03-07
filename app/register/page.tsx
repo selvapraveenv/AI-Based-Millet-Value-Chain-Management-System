@@ -11,8 +11,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
-import { collection, addDoc, query, where, getDocs, Timestamp } from "firebase/firestore"
-import { db } from "@/lib/firebase"
+import { buildBackendUrl } from "@/lib/api"
 
 export default function RegisterPage() {
   const router = useRouter()
@@ -47,31 +46,12 @@ export default function RegisterPage() {
     setIsSubmitting(true)
 
     try {
-      // Check if phone already exists
-      const usersRef = collection(db, "users")
-      const phoneQuery = query(usersRef, where("phone", "==", phone))
-      const phoneSnapshot = await getDocs(phoneQuery)
-
-      if (!phoneSnapshot.empty) {
-        setError("An account with this phone number already exists!")
-        setIsSubmitting(false)
-        return
-      }
-
-      // Check if email already exists (if provided)
-      if (email) {
-        const emailQuery = query(usersRef, where("email", "==", email))
-        const emailSnapshot = await getDocs(emailQuery)
-
-        if (!emailSnapshot.empty) {
-          setError("An account with this email already exists!")
-          setIsSubmitting(false)
-          return
-        }
-      }
-
-      // Save user to Firestore
-      await addDoc(collection(db, "users"), {
+      const response = await fetch(buildBackendUrl("/api/auth/register"), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
         name,
         phone,
         role,
@@ -81,9 +61,16 @@ export default function RegisterPage() {
         pincode,
         email: email || "",
         password,
-        verified: false,
-        createdAt: Timestamp.now(),
+        }),
       })
+
+      const payload = await response.json()
+
+      if (!response.ok) {
+        setError(payload?.message || "Something went wrong. Please try again.")
+        setIsSubmitting(false)
+        return
+      }
 
       setIsSubmitting(false)
       setIsSuccess(true)

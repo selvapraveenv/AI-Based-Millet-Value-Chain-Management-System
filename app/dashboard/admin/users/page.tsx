@@ -7,8 +7,10 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { toast } from "sonner"
-import { getAllUsers, deleteUserDoc, type UserDoc } from "@/lib/firestore"
+import { type UserDoc } from "@/lib/firestore"
+import { buildBackendUrl } from "@/lib/api"
 
 export default function AdminUsersPage() {
   const [users, setUsers] = useState<UserDoc[]>([])
@@ -19,8 +21,13 @@ export default function AdminUsersPage() {
   useEffect(() => {
     async function fetchUsers() {
       try {
-        const data = await getAllUsers()
-        setUsers(data)
+        const response = await fetch(buildBackendUrl("/api/users"))
+        const payload = await response.json()
+        if (response.ok && payload?.success) {
+          setUsers(payload.users || [])
+        } else {
+          setUsers([])
+        }
       } catch (error) {
         console.error("Error:", error)
       } finally {
@@ -34,7 +41,8 @@ export default function AdminUsersPage() {
   async function handleDelete(userId: string) {
     if (!confirm("Are you sure you want to delete this user?")) return
     try {
-      await deleteUserDoc(userId)
+      const response = await fetch(buildBackendUrl(`/api/users/${userId}`), { method: "DELETE" })
+      if (!response.ok) throw new Error("Failed")
       toast.success("User deleted")
       setUsers(users.filter((u) => u.id !== userId))
     } catch (error) {
@@ -71,7 +79,7 @@ export default function AdminUsersPage() {
                   <TableCell className="text-muted-foreground">{user.email}</TableCell>
                   <TableCell><Badge variant="outline">{user.role}</Badge></TableCell>
                   <TableCell className="text-muted-foreground">{user.district || "N/A"}</TableCell>
-                  <TableCell><Circle className="h-3 w-3 fill-green-500 text-green-500" /></TableCell>
+                  <TableCell><div className="flex items-center gap-2"><Circle className="h-3 w-3 fill-green-500 text-green-500" /><span className="text-sm text-green-700">Active</span></div></TableCell>
                   <TableCell>
                     <div className="flex gap-2">
                       {user.role !== "admin" && <Button variant="destructive" size="sm" onClick={() => handleDelete(user.id!)}><Trash2 className="h-4 w-4" /></Button>}

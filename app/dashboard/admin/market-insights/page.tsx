@@ -7,6 +7,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Alert, AlertDescription } from "@/components/ui/alert"
+import { buildBackendUrl } from "@/lib/api"
 import {
   BarChart, Bar, LineChart, Line, AreaChart, Area, PieChart, Pie, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer
@@ -46,7 +47,7 @@ export default function MarketInsightsPage() {
   async function fetchMarketInsights() {
     try {
       setError(null)
-      const response = await fetch('http://localhost:5000/api/market-insights')
+      const response = await fetch(buildBackendUrl('/api/market-insights'))
       
       if (!response.ok) {
         throw new Error('Failed to fetch market insights')

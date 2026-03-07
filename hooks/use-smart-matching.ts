@@ -4,6 +4,7 @@
  */
 
 import { useState, useCallback } from "react";
+import { buildBackendUrl } from "@/lib/api";
 
 export interface MatchPreferences {
   maxPrice: number;
@@ -66,7 +67,7 @@ export function useSmartMatching() {
     setError(null);
 
     try {
-      const response = await fetch("http://localhost:5000/api/ai/smart-match", {
+      const response = await fetch(buildBackendUrl("/api/ai/smart-match"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(preferences),

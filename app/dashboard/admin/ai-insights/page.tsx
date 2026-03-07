@@ -30,6 +30,7 @@ import {
   AlertCircle,
   CheckCircle2,
 } from "lucide-react";
+import { buildBackendUrl } from "@/lib/api";
 
 interface Trend {
   milletType: string;
@@ -65,7 +66,7 @@ export default function AIInsightsPage() {
       setLoading(true);
       setError("");
       const response = await fetch(
-        "http://localhost:5000/api/ai/demand-forecast",
+        buildBackendUrl("/api/ai/demand-forecast"),
       );
 
       if (!response.ok) {

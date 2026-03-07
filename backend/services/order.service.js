@@ -1,14 +1,14 @@
 /**
  * Order Service - Business logic for order workflow
- * 
+ *
  * Handles order status transitions with role-based permissions
  */
 
-import { getFirestore, Collections } from '../config/firebase.js';
+import { getFirestore, Collections } from "../config/firebase.js";
 
 /**
  * ORDER STATUS FLOW:
- * placed -> confirmed -> processing -> shipped -> delivered
+ * placed -> confirmed -> payment_completed -> processing -> shipped -> delivered
  *                  |
  *                  └---> cancelled
  */
@@ -18,39 +18,49 @@ import { getFirestore, Collections } from '../config/firebase.js';
  * Defines which roles can transition to which statuses
  */
 const STATUS_PERMISSIONS = {
-  'placed': {
-    allowedRoles: ['consumer'], // Only consumers create orders
-    nextStatuses: ['confirmed', 'cancelled']
+  placed: {
+    allowedRoles: ["consumer"], // Only consumers create orders
+    nextStatuses: ["confirmed", "cancelled"],
   },
-  'confirmed': {
-    allowedRoles: ['farmer', 'shg', 'admin'], // Sellers confirm orders
-    nextStatuses: ['processing', 'cancelled']
+  confirmed: {
+    allowedRoles: ["farmer", "shg", "admin"], // Sellers confirm orders
+    nextStatuses: ["payment_completed", "cancelled"],
   },
-  'processing': {
-    allowedRoles: ['shg', 'admin'], // SHG processes the batch
-    nextStatuses: ['shipped', 'cancelled']
+  payment_completed: {
+    allowedRoles: ["consumer", "admin"], // Buyer completes payment
+    nextStatuses: ["processing", "cancelled"],
   },
-  'shipped': {
-    allowedRoles: ['shg', 'admin'], // Shipping initiated
-    nextStatuses: ['delivered']
+  processing: {
+    allowedRoles: ["farmer", "shg", "admin"], // Seller/SHG processes the batch
+    nextStatuses: ["shipped", "cancelled"],
   },
-  'delivered': {
-    allowedRoles: ['consumer', 'admin'], // Consumer confirms delivery
-    nextStatuses: [] // Final status
+  shipped: {
+    allowedRoles: ["farmer", "shg", "admin"], // Shipping initiated
+    nextStatuses: ["delivered"],
   },
-  'cancelled': {
-    allowedRoles: ['consumer', 'farmer', 'shg', 'admin'],
-    nextStatuses: [] // Final status
-  }
+  delivered: {
+    allowedRoles: ["farmer", "consumer", "admin"], // Farmer or consumer confirms delivery
+    nextStatuses: [], // Final status
+  },
+  cancelled: {
+    allowedRoles: ["consumer", "farmer", "shg", "admin"],
+    nextStatuses: [], // Final status
+  },
 };
 
 /**
  * Update order status with business logic validation
- * 
+ *
  * @param {Object} params - Order update parameters
  * @returns {Object} Update result
  */
-export async function updateOrderStatus({ orderId, newStatus, userId, userRole, reason }) {
+export async function updateOrderStatus({
+  orderId,
+  newStatus,
+  userId,
+  userRole,
+  reason,
+}) {
   const db = getFirestore();
 
   try {
@@ -59,7 +69,7 @@ export async function updateOrderStatus({ orderId, newStatus, userId, userRole, 
     const orderDoc = await orderRef.get();
 
     if (!orderDoc.exists) {
-      throw new Error('Order not found');
+      throw new Error("Order not found");
     }
 
     const orderData = orderDoc.data();
@@ -67,39 +77,39 @@ export async function updateOrderStatus({ orderId, newStatus, userId, userRole, 
 
     // Step 2: Validate if status transition is allowed
     const currentStatusConfig = STATUS_PERMISSIONS[currentStatus];
-    
+
     if (!currentStatusConfig) {
-      throw new Error('Invalid current order status');
+      throw new Error("Invalid current order status");
     }
 
     // Check if new status is a valid next status
     if (!currentStatusConfig.nextStatuses.includes(newStatus)) {
       throw new Error(
         `Invalid status transition: Cannot change from '${currentStatus}' to '${newStatus}'. ` +
-        `Allowed next statuses: ${currentStatusConfig.nextStatuses.join(', ')}`
+          `Allowed next statuses: ${currentStatusConfig.nextStatuses.join(", ")}`,
       );
     }
 
     // Step 3: Check role permissions for the new status
     const newStatusConfig = STATUS_PERMISSIONS[newStatus];
-    
+
     if (!newStatusConfig.allowedRoles.includes(userRole)) {
       throw new Error(
         `User role '${userRole}' is not allowed to set status to '${newStatus}'. ` +
-        `Allowed roles: ${newStatusConfig.allowedRoles.join(', ')}`
+          `Allowed roles: ${newStatusConfig.allowedRoles.join(", ")}`,
       );
     }
 
     // Step 4: Additional business logic validations
 
     // For cancellations, require a reason
-    if (newStatus === 'cancelled' && !reason) {
-      throw new Error('Cancellation reason is required');
+    if (newStatus === "cancelled" && !reason) {
+      throw new Error("Cancellation reason is required");
     }
 
     // For delivered status, ensure it was shipped first
-    if (newStatus === 'delivered' && currentStatus !== 'shipped') {
-      throw new Error('Order must be shipped before marking as delivered');
+    if (newStatus === "delivered" && currentStatus !== "shipped") {
+      throw new Error("Order must be shipped before marking as delivered");
     }
 
     // Step 5: Update the order in Firestore
@@ -113,8 +123,8 @@ export async function updateOrderStatus({ orderId, newStatus, userId, userRole, 
         timestamp: new Date(),
         userId,
         userRole,
-        reason: reason || null
-      }
+        reason: reason || null,
+      },
     };
 
     // Add to status history
@@ -124,19 +134,21 @@ export async function updateOrderStatus({ orderId, newStatus, userId, userRole, 
       timestamp: new Date(),
       userId,
       userRole,
-      reason: reason || null
+      reason: reason || null,
     });
     updateData.statusHistory = statusHistory;
 
     // Special handling for different statuses
-    if (newStatus === 'confirmed') {
+    if (newStatus === "confirmed") {
       updateData.confirmedAt = new Date();
-    } else if (newStatus === 'shipped') {
+    } else if (newStatus === "payment_completed") {
+      updateData.paymentCompletedAt = new Date();
+    } else if (newStatus === "shipped") {
       updateData.shippedAt = new Date();
-    } else if (newStatus === 'delivered') {
+    } else if (newStatus === "delivered") {
       updateData.deliveredAt = new Date();
       updateData.completedAt = new Date();
-    } else if (newStatus === 'cancelled') {
+    } else if (newStatus === "cancelled") {
       updateData.cancelledAt = new Date();
       updateData.cancellationReason = reason;
     }
@@ -146,9 +158,9 @@ export async function updateOrderStatus({ orderId, newStatus, userId, userRole, 
     // Step 6: Create notification (could be expanded to actually send notifications)
     await createOrderNotification({
       orderId,
-      userId: orderData.userId,
+      userId: orderData.buyerId,
       status: newStatus,
-      message: `Your order #${orderId} is now ${newStatus}`
+      message: `Your order #${orderId} is now ${newStatus}`,
     });
 
     return {
@@ -160,12 +172,11 @@ export async function updateOrderStatus({ orderId, newStatus, userId, userRole, 
       message: `Order status successfully updated from '${currentStatus}' to '${newStatus}'`,
       order: {
         ...orderData,
-        ...updateData
-      }
+        ...updateData,
+      },
     };
-
   } catch (error) {
-    console.error('Order status update error:', error);
+    console.error("Order status update error:", error);
     throw error;
   }
 }
@@ -176,19 +187,19 @@ export async function updateOrderStatus({ orderId, newStatus, userId, userRole, 
  */
 async function createOrderNotification({ orderId, userId, status, message }) {
   const db = getFirestore();
-  
+
   try {
-    await db.collection('notifications').add({
-      type: 'order_update',
+    await db.collection("notifications").add({
+      type: "order_update",
       orderId,
       userId,
       status,
       message,
       read: false,
-      createdAt: new Date()
+      createdAt: new Date(),
     });
   } catch (error) {
-    console.error('Failed to create notification:', error);
+    console.error("Failed to create notification:", error);
     // Don't throw - notification is not critical
   }
 }

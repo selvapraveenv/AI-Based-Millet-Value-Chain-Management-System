@@ -1,15 +1,25 @@
 ﻿"use client"
 
 import { useState, useEffect } from "react"
-import { Loader2, MapPin, Plus, X } from "lucide-react"
+import { Loader2, MapPin, Plus, X, Edit2, Trash2 } from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog"
 import { toast } from "sonner"
-import { getAllUsers, updateUser, type UserDoc } from "@/lib/firestore"
+import { buildBackendUrl } from "@/lib/api"
+
+type UserDoc = {
+  id?: string
+  role: string
+  name: string
+  district?: string
+  assignedTaluks?: string[]
+  status?: string
+}
 
 // Taluk list for assignments
 const AVAILABLE_TALUKS = [
@@ -39,18 +49,20 @@ export default function SHGTalukAssignmentPage() {
   const [selectedTaluk, setSelectedTaluk] = useState("")
   const [editTaluks, setEditTaluks] = useState<string[]>([])
 
-  useEffect(() => {
-    async function fetchSHGs() {
-      try {
-        const allUsers = await getAllUsers()
-        setShgs(allUsers.filter((u) => u.role === "shg"))
-      } catch (error) {
-        console.error("Error:", error)
-      } finally {
-        setLoading(false)
-      }
+  async function fetchSHGs() {
+    try {
+      const response = await fetch(buildBackendUrl("/api/users?role=shg"))
+      const payload = await response.json()
+      const users = response.ok && payload?.success ? payload.users || [] : []
+      setShgs(users)
+    } catch (error) {
+      console.error("Error:", error)
+      setShgs([])
     }
-    fetchSHGs()
+  }
+
+  useEffect(() => {
+    fetchSHGs().finally(() => setLoading(false))
   }, [])
 
   function addTaluk() {
@@ -67,13 +79,40 @@ export default function SHGTalukAssignmentPage() {
   async function handleSave() {
     if (!editingSHG) return
     try {
-      await updateUser(editingSHG.id!, { assignedTaluks: editTaluks })
+      const response = await fetch(buildBackendUrl(`/api/users/${encodeURIComponent(editingSHG.id!)}`), {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ assignedTaluks: editTaluks }),
+      })
+
+      const payload = await response.json()
+      if (!response.ok || !payload?.success) {
+        throw new Error(payload?.message || "Failed to update assignments")
+      }
+
       toast.success("Taluk assignments updated")
       setEditingSHG(null)
-      const allUsers = await getAllUsers()
-      setShgs(allUsers.filter((u) => u.role === "shg"))
+      await fetchSHGs()
     } catch (error) {
       toast.error("Failed to update assignments")
+    }
+  }
+
+  async function handleDelete(shgId: string, shgName: string) {
+    try {
+      const response = await fetch(buildBackendUrl(`/api/users/${encodeURIComponent(shgId)}`), {
+        method: "DELETE",
+      })
+      const payload = await response.json()
+      if (!response.ok || !payload?.success) {
+        throw new Error(payload?.message || "Failed to delete SHG")
+      }
+
+      toast.success(`${shgName} deleted successfully`)
+      setShgs(shgs.filter((s) => s.id !== shgId))
+    } catch (error) {
+      toast.error("Failed to delete SHG")
+      console.error("Delete error:", error)
     }
   }
 
@@ -106,10 +145,22 @@ export default function SHGTalukAssignmentPage() {
                         {shg.assignedTaluks && shg.assignedTaluks.length > 0 ? shg.assignedTaluks.map((t) => <Badge key={t} variant="secondary">{t}</Badge>) : <span className="text-muted-foreground text-sm">No taluks assigned</span>}
                       </div>
                     </TableCell>
-                    <TableCell><Badge variant={shg.status === "active" ? "default" : "secondary"}>{shg.status || "active"}</Badge></TableCell>
                     <TableCell>
-                      <Dialog>
-                        <DialogTrigger asChild><Button variant="outline" size="sm" onClick={() => { setEditingSHG(shg); setEditTaluks(shg.assignedTaluks || []); setSelectedTaluk("") }}>Edit Taluks</Button></DialogTrigger>
+                      <Badge 
+                        className={shg.status === "active" ? "bg-green-500/90 hover:bg-green-500 text-white" : shg.status === "inactive" ? "bg-gray-500/90 hover:bg-gray-500 text-white" : "bg-blue-500/90 hover:bg-blue-500 text-white"}
+                      >
+                        {shg.status || "active"}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex items-center gap-2">
+                        <Dialog>
+                          <DialogTrigger asChild>
+                            <Button variant="outline" size="sm" onClick={() => { setEditingSHG(shg); setEditTaluks(shg.assignedTaluks || []); setSelectedTaluk("") }}>
+                              <Edit2 className="h-4 w-4 mr-1" />
+                              Edit
+                            </Button>
+                          </DialogTrigger>
                         <DialogContent>
                           <DialogHeader><DialogTitle>Assign Taluks to {shg.name}</DialogTitle><DialogDescription>Add or remove taluk assignments for this SHG</DialogDescription></DialogHeader>
                           <div className="space-y-4 py-4">
@@ -137,6 +188,31 @@ export default function SHGTalukAssignmentPage() {
                           <DialogFooter><Button onClick={handleSave}>Save Assignments</Button></DialogFooter>
                         </DialogContent>
                       </Dialog>
+                      <AlertDialog>
+                        <AlertDialogTrigger asChild>
+                          <Button variant="outline" size="sm" className="text-destructive hover:bg-destructive hover:text-destructive-foreground">
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </AlertDialogTrigger>
+                        <AlertDialogContent>
+                          <AlertDialogHeader>
+                            <AlertDialogTitle>Delete SHG</AlertDialogTitle>
+                            <AlertDialogDescription>
+                              Are you sure you want to delete <strong>{shg.name}</strong>? This will remove all their taluk assignments and they will no longer be able to verify crops. This action cannot be undone.
+                            </AlertDialogDescription>
+                          </AlertDialogHeader>
+                          <AlertDialogFooter>
+                            <AlertDialogCancel>Cancel</AlertDialogCancel>
+                            <AlertDialogAction 
+                              onClick={() => handleDelete(shg.id!, shg.name)} 
+                              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                            >
+                              Delete
+                            </AlertDialogAction>
+                          </AlertDialogFooter>
+                        </AlertDialogContent>
+                      </AlertDialog>
+                      </div>
                     </TableCell>
                   </TableRow>
                 ))}

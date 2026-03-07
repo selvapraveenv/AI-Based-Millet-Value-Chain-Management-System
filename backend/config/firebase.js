@@ -3,8 +3,8 @@
  * Connects to Firebase Firestore for data storage
  */
 
-import admin from 'firebase-admin';
-import dotenv from 'dotenv';
+import admin from "firebase-admin";
+import dotenv from "dotenv";
 
 dotenv.config();
 
@@ -18,7 +18,7 @@ export const initializeFirebase = () => {
   try {
     // Check if already initialized
     if (admin.apps.length > 0) {
-      console.log('✅ Firebase already initialized');
+      console.log("✅ Firebase already initialized");
       db = admin.firestore();
       return;
     }
@@ -28,18 +28,20 @@ export const initializeFirebase = () => {
       credential: admin.credential.cert({
         projectId: process.env.FIREBASE_PROJECT_ID,
         clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-        privateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n')
-      })
+        privateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, "\n"),
+      }),
     });
 
     // Get Firestore instance
     db = admin.firestore();
-    
-    console.log('✅ Firebase Admin SDK initialized successfully');
-    console.log(`📦 Connected to Firestore project: ${process.env.FIREBASE_PROJECT_ID}`);
+
+    console.log("✅ Firebase Admin SDK initialized successfully");
+    console.log(
+      `📦 Connected to Firestore project: ${process.env.FIREBASE_PROJECT_ID}`,
+    );
   } catch (error) {
-    console.error('❌ Firebase initialization failed:', error.message);
-    console.error('Please check your .env file and Firebase credentials');
+    console.error("❌ Firebase initialization failed:", error.message);
+    console.error("Please check your .env file and Firebase credentials");
     process.exit(1);
   }
 };
@@ -50,9 +52,24 @@ export const initializeFirebase = () => {
  */
 export const getFirestore = () => {
   if (!db) {
-    throw new Error('Firestore not initialized. Call initializeFirebase() first.');
+    throw new Error(
+      "Firestore not initialized. Call initializeFirebase() first.",
+    );
   }
   return db;
+};
+
+/**
+ * Get Storage bucket instance
+ * @returns {admin.storage.Bucket} Storage bucket
+ */
+export const getStorageBucket = () => {
+  return admin
+    .storage()
+    .bucket(
+      process.env.FIREBASE_BUCKET ||
+        `${process.env.FIREBASE_PROJECT_ID}.appspot.com`,
+    );
 };
 
 /**
@@ -60,17 +77,17 @@ export const getFirestore = () => {
  * Centralized collection names for consistency
  */
 export const Collections = {
-  FARMERS: 'farmers',
-  SHGS: 'shgs',
-  CONSUMERS: 'consumers',
-  ADMINS: 'admins',
-  LISTINGS: 'listings',
-  ORDERS: 'orders',
-  BATCHES: 'batches',
-  PRODUCTS: 'products',
-  TRANSACTIONS: 'transactions',
-  QUALITY_CHECKS: 'qualityChecks',
-  PRICE_HISTORY: 'priceHistory'
+  FARMERS: "farmers",
+  SHGS: "shgs",
+  CONSUMERS: "consumers",
+  ADMINS: "admins",
+  LISTINGS: "listings",
+  ORDERS: "orders",
+  BATCHES: "batches",
+  PRODUCTS: "products",
+  TRANSACTIONS: "transactions",
+  QUALITY_CHECKS: "qualityChecks",
+  PRICE_HISTORY: "priceHistory",
 };
 
 export default admin;

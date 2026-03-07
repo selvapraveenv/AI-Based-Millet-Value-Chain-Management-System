@@ -25,3 +25,12 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# AI-generated documentation and test files
+AI_*.md
+*_REPORT*.md
+*_SUMMARY*.md
+*_DOCUMENTATION*.md
+QUICKSTART_*.md
+IMPLEMENTATION_*.md
+local-layout.tsx

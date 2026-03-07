@@ -20,6 +20,8 @@ import {
   CheckSquare,
   BarChart3,
   UserPlus,
+  Brain,
+  AlertTriangle,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
@@ -161,6 +163,8 @@ function getNavItems(role: string) {
       { href: `/dashboard/farmer`, label: "Overview", icon: Home },
       { href: `/dashboard/farmer/listings`, label: "My Listings", icon: Package },
       { href: `/dashboard/farmer/orders`, label: "Orders", icon: Truck },
+      { href: `/dashboard/farmer/disputes`, label: "Product Disputes", icon: AlertTriangle },
+      { href: `/dashboard/farmer/support`, label: "Support", icon: FileText },
       { href: `/dashboard/farmer/payments`, label: "Payments", icon: CreditCard },
     ],
     shg: [
@@ -168,19 +172,25 @@ function getNavItems(role: string) {
       { href: `/dashboard/shg/farmers`, label: "Pending Verifications", icon: ClipboardCheck },
       { href: `/dashboard/shg/orders`, label: "Verified Crops", icon: CheckSquare },
       { href: `/dashboard/shg/batches`, label: "Verification History", icon: FileText },
+      { href: `/dashboard/shg/disputes`, label: "Product Disputes", icon: AlertTriangle },
+      { href: `/dashboard/shg/support`, label: "Support", icon: FileText },
     ],
     consumer: [
       { href: `/dashboard/consumer`, label: "Overview", icon: Home },
       { href: `/dashboard/consumer/products`, label: "Browse Crops", icon: Store },
       { href: `/dashboard/consumer/orders`, label: "My Orders", icon: ShoppingBag },
+      { href: `/dashboard/consumer/disputes`, label: "My Disputes", icon: AlertTriangle },
+      { href: `/dashboard/consumer/support`, label: "Support", icon: FileText },
       { href: `/dashboard/consumer/tracking`, label: "Track Orders", icon: MapPin },
+      { href: `/dashboard/consumer/payments`, label: "Payments", icon: CreditCard },
     ],
     admin: [
       { href: `/dashboard/admin`, label: "Overview", icon: Home },
+      { href: `/dashboard/admin/market-insights`, label: "Market Insights", icon: Brain },
       { href: `/dashboard/admin/users`, label: "User Management", icon: Users },
       { href: `/dashboard/admin/add-shg`, label: "Add SHG", icon: UserPlus },
       { href: `/dashboard/admin/quality`, label: "SHG-Taluk Assignment", icon: MapPin },
-      { href: `/dashboard/admin/batches`, label: "Disputes", icon: ClipboardCheck },
+      { href: `/dashboard/admin/support`, label: "Support Issues", icon: ClipboardCheck },
       { href: `/dashboard/admin/analytics`, label: "Analytics", icon: BarChart3 },
     ],
   }

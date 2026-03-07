@@ -4,25 +4,27 @@ import { useState, useEffect } from "react"
 import { CreditCard, TrendingUp, ArrowDownRight, ArrowUpRight, Wallet, Loader2 } from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { getFarmerPayments, getFarmerPaymentStats } from "@/lib/firestore"
-import { getLoggedInUser } from "@/lib/auth"
+import { useAuthUser } from "@/hooks/use-auth-user"
+import { buildBackendUrl } from "@/lib/api"
 
 export default function FarmerPayments() {
   const [payments, setPayments] = useState<any[]>([])
   const [paymentStats, setPaymentStats] = useState({ totalEarnings: 0, pendingPayments: 0, thisMonth: 0 })
   const [loading, setLoading] = useState(true)
 
+  const user = useAuthUser()
+
   useEffect(() => {
     async function fetchData() {
       try {
-        const user = getLoggedInUser()
         if (!user) return
-        const [paymentsData, statsData] = await Promise.all([
-          getFarmerPayments(user.id),
-          getFarmerPaymentStats(user.id),
-        ])
-        setPayments(paymentsData)
-        setPaymentStats(statsData)
+        const response = await fetch(buildBackendUrl(`/api/payments/farmer/${encodeURIComponent(user.id)}`))
+        const payload = await response.json()
+        
+        if (response.ok && payload?.success) {
+          setPayments(payload.payments || [])
+          setPaymentStats(payload.stats || { totalEarnings: 0, pendingPayments: 0, thisMonth: 0 })
+        }
       } catch (error) {
         console.error("Error fetching payments:", error)
       } finally {
@@ -30,7 +32,7 @@ export default function FarmerPayments() {
       }
     }
     fetchData()
-  }, [])
+  }, [user])
 
   if (loading) {
     return <div className="flex items-center justify-center h-64"><Loader2 className="h-8 w-8 animate-spin text-primary" /></div>

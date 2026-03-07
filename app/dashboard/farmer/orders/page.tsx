@@ -5,16 +5,17 @@ import { Clock, Truck, CheckCircle, Loader2, ShoppingBag } from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { getOrdersBySeller, updateOrderStatus } from "@/lib/firestore"
 import { getLoggedInUser } from "@/lib/auth"
+import { buildBackendUrl } from "@/lib/api"
 
 const statusConfig: Record<string, { label: string; icon: any; color: string }> = {
-  placed: { label: "New Order", icon: Clock, color: "bg-accent text-accent-foreground" },
-  confirmed: { label: "Confirmed", icon: Clock, color: "bg-accent text-accent-foreground" },
-  processing: { label: "Processing", icon: Truck, color: "bg-primary/10 text-primary" },
-  shipped: { label: "Shipped", icon: Truck, color: "bg-primary/10 text-primary" },
-  delivered: { label: "Delivered", icon: CheckCircle, color: "bg-primary text-primary-foreground" },
-  cancelled: { label: "Cancelled", icon: Clock, color: "bg-destructive text-destructive-foreground" },
+  placed: { label: "New Order", icon: Clock, color: "bg-slate-100 text-slate-700 border border-slate-300" },
+  confirmed: { label: "Awaiting Payment", icon: Clock, color: "bg-yellow-100 text-yellow-700 border border-yellow-300" },
+  payment_completed: { label: "Payment Received", icon: CheckCircle, color: "bg-cyan-100 text-cyan-700 border border-cyan-300" },
+  processing: { label: "Processing", icon: Truck, color: "bg-blue-100 text-blue-700 border border-blue-300" },
+  shipped: { label: "Shipped", icon: Truck, color: "bg-purple-100 text-purple-700 border border-purple-300" },
+  delivered: { label: "Delivered", icon: CheckCircle, color: "bg-green-100 text-green-700 border border-green-300" },
+  cancelled: { label: "Cancelled", icon: Clock, color: "bg-red-100 text-red-700 border border-red-300" },
 }
 
 export default function FarmerOrders() {
@@ -27,7 +28,9 @@ export default function FarmerOrders() {
       try {
         const user = getLoggedInUser()
         if (!user) return
-        const ordersData = await getOrdersBySeller(user.id)
+        const response = await fetch(buildBackendUrl(`/api/orders/seller/${encodeURIComponent(user.id)}`))
+        const payload = await response.json()
+        const ordersData = response.ok && payload?.success ? payload.orders || [] : []
         setOrders(ordersData)
       } catch (error) {
         console.error("Error fetching orders:", error)
@@ -40,7 +43,7 @@ export default function FarmerOrders() {
 
   const nextStatus: Record<string, { next: string; label: string }> = {
     placed: { next: "confirmed", label: "Confirm Order" },
-    confirmed: { next: "processing", label: "Start Processing" },
+    payment_completed: { next: "processing", label: "Start Processing" },
     processing: { next: "shipped", label: "Mark as Shipped" },
     shipped: { next: "delivered", label: "Mark as Delivered" },
   }
@@ -48,7 +51,18 @@ export default function FarmerOrders() {
   const handleUpdateStatus = async (orderId: string, newStatus: string) => {
     setUpdatingId(orderId)
     try {
-      await updateOrderStatus(orderId, newStatus)
+      const user = getLoggedInUser()
+      if (!user) throw new Error("No user")
+      const response = await fetch(buildBackendUrl(`/api/orders/${orderId}/status`), {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          newStatus,
+          userId: user.id,
+          userRole: user.role,
+        }),
+      })
+      if (!response.ok) throw new Error("Failed to update")
       setOrders(orders.map(o => o.id === orderId ? { ...o, status: newStatus } : o))
     } catch (error) {
       console.error("Error updating order:", error)
@@ -68,9 +82,9 @@ export default function FarmerOrders() {
         <p className="text-muted-foreground">Track orders placed by consumers for your crops</p>
       </div>
       <div className="grid gap-4 md:grid-cols-3">
-        <Card className="border-border"><CardContent className="p-4 flex items-center gap-4"><div className="h-12 w-12 rounded-full bg-accent flex items-center justify-center"><Clock className="h-6 w-6 text-accent-foreground" /></div><div><p className="text-2xl font-bold text-foreground">{orders.filter(o => ["placed","confirmed"].includes(o.status)).length}</p><p className="text-sm text-muted-foreground">New Orders</p></div></CardContent></Card>
-        <Card className="border-border"><CardContent className="p-4 flex items-center gap-4"><div className="h-12 w-12 rounded-full bg-primary/10 flex items-center justify-center"><Truck className="h-6 w-6 text-primary" /></div><div><p className="text-2xl font-bold text-foreground">{orders.filter(o => ["processing","shipped"].includes(o.status)).length}</p><p className="text-sm text-muted-foreground">In Transit</p></div></CardContent></Card>
-        <Card className="border-border"><CardContent className="p-4 flex items-center gap-4"><div className="h-12 w-12 rounded-full bg-primary flex items-center justify-center"><CheckCircle className="h-6 w-6 text-primary-foreground" /></div><div><p className="text-2xl font-bold text-foreground">{orders.filter(o => o.status === "delivered").length}</p><p className="text-sm text-muted-foreground">Completed</p></div></CardContent></Card>
+        <Card className="border-border"><CardContent className="p-4 flex items-center gap-4"><div className="h-12 w-12 rounded-full bg-yellow-100 flex items-center justify-center"><Clock className="h-6 w-6 text-yellow-700" /></div><div><p className="text-2xl font-bold text-foreground">{orders.filter(o => ["placed","confirmed"].includes(o.status)).length}</p><p className="text-sm text-muted-foreground">New / Awaiting Payment</p></div></CardContent></Card>
+        <Card className="border-border"><CardContent className="p-4 flex items-center gap-4"><div className="h-12 w-12 rounded-full bg-blue-100 flex items-center justify-center"><Truck className="h-6 w-6 text-blue-700" /></div><div><p className="text-2xl font-bold text-foreground">{orders.filter(o => ["payment_completed","processing","shipped"].includes(o.status)).length}</p><p className="text-sm text-muted-foreground">Paid / In Transit</p></div></CardContent></Card>
+        <Card className="border-border"><CardContent className="p-4 flex items-center gap-4"><div className="h-12 w-12 rounded-full bg-green-500 flex items-center justify-center"><CheckCircle className="h-6 w-6 text-white" /></div><div><p className="text-2xl font-bold text-foreground">{orders.filter(o => o.status === "delivered").length}</p><p className="text-sm text-muted-foreground">Completed</p></div></CardContent></Card>
       </div>
       <Card className="border-border">
         <CardHeader><CardTitle className="text-foreground">All Orders</CardTitle><CardDescription>Complete history of consumer orders</CardDescription></CardHeader>
@@ -105,7 +119,9 @@ export default function FarmerOrders() {
                         <td className="py-3 px-4 text-sm font-medium text-primary">Rs {order.totalPrice}</td>
                         <td className="py-3 px-4"><Badge className={status.color}><status.icon className="mr-1 h-3 w-3" />{status.label}</Badge></td>
                         <td className="py-3 px-4">
-                          {nextStatus[order.status] ? (
+                          {order.status === "confirmed" ? (
+                            <span className="text-xs text-muted-foreground font-medium">Waiting for buyer payment</span>
+                          ) : nextStatus[order.status] ? (
                             <Button size="sm" disabled={updatingId === order.id} onClick={() => handleUpdateStatus(order.id, nextStatus[order.status].next)}>
                               {updatingId === order.id ? "Updating..." : nextStatus[order.status].label}
                             </Button>

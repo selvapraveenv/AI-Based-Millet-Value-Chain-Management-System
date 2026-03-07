@@ -1,24 +1,35 @@
 ﻿"use client"
 
 import { useState, useEffect } from "react"
-import { ClipboardCheck, CheckCircle, XCircle, Clock, TrendingUp, Loader2 } from "lucide-react"
+import { ClipboardCheck, CheckCircle, XCircle, Clock, TrendingUp, Loader2, User } from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { getSHGDashboardStats } from "@/lib/firestore"
+import { Button } from "@/components/ui/button"
+import Link from "next/link"
 import { getLoggedInUser } from "@/lib/auth"
+import { buildBackendUrl } from "@/lib/api"
+import { useAuthUser } from "@/hooks/use-auth-user"
+import { useRoleProtection } from "@/hooks/use-role-protection"
 
 export default function SHGDashboard() {
   const [stats, setStats] = useState({ pendingCount: 0, verifiedCount: 0, rejectedCount: 0, totalReviewed: 0 })
   const [loading, setLoading] = useState(true)
 
   const user = getLoggedInUser()
+  const authUser = useAuthUser()
+  const roleError = useRoleProtection("shg")
+  const displayName = authUser?.name?.trim() || "SHG Verifier"
   const taluks = user?.assignedTaluks || []
 
   useEffect(() => {
     async function fetchData() {
       try {
         if (!user) return
-        const data = await getSHGDashboardStats(user.id, taluks)
-        setStats(data)
+        const queryTaluks = encodeURIComponent((taluks || []).join(","))
+        const response = await fetch(buildBackendUrl(`/api/listings/shg-stats?shgId=${encodeURIComponent(user.id)}&taluks=${queryTaluks}`))
+        const payload = await response.json()
+        if (response.ok && payload?.success) {
+          setStats(payload.stats)
+        }
       } catch (error) {
         console.error("Error fetching stats:", error)
       } finally {
@@ -32,6 +43,18 @@ export default function SHGDashboard() {
     return <div className="flex items-center justify-center h-64"><Loader2 className="h-8 w-8 animate-spin text-primary" /><span className="ml-2 text-muted-foreground">Loading dashboard...</span></div>
   }
 
+  if (roleError) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <div className="bg-destructive/10 border border-destructive rounded-lg p-6 max-w-md text-center">
+          <h2 className="text-lg font-semibold text-destructive mb-2">Access Denied</h2>
+          <p className="text-muted-foreground mb-4">{roleError}</p>
+          <p className="text-sm text-muted-foreground">Please log in with the correct credentials to access this dashboard.</p>
+        </div>
+      </div>
+    )
+  }
+
   const statsDisplay = [
     { label: "Pending Verifications", value: String(stats.pendingCount), icon: Clock, change: "Crops awaiting review" },
     { label: "Verified Crops", value: String(stats.verifiedCount), icon: CheckCircle, change: "Approved for sale" },
@@ -41,9 +64,17 @@ export default function SHGDashboard() {
 
   return (
     <div className="space-y-8">
-      <div>
-        <h1 className="text-3xl font-bold text-foreground">Welcome, SHG Verifier</h1>
-        <p className="text-muted-foreground">Verify crop quality for farmers in your assigned taluks: {taluks.join(", ") || "None assigned"}</p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-3xl font-bold text-foreground">Welcome, {displayName}</h1>
+          <p className="text-muted-foreground">Verify crop quality for farmers in your assigned taluks: {taluks.join(", ") || "None assigned"}</p>
+        </div>
+        <Link href="/dashboard/shg/profile">
+          <Button variant="outline" size="sm" className="gap-2">
+            <User className="h-4 w-4" />
+            My Profile
+          </Button>
+        </Link>
       </div>
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
         {statsDisplay.map((stat) => (

@@ -9,8 +9,8 @@ import { Badge } from "@/components/ui/badge"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
 import { Label } from "@/components/ui/label"
 import { toast } from "sonner"
-import { getVerifiedListings, createOrder, updateListing } from "@/lib/firestore"
 import { getLoggedInUser } from "@/lib/auth"
+import { buildBackendUrl } from "@/lib/api"
 
 export default function BrowseCropsPage() {
   const [crops, setCrops] = useState<any[]>([])
@@ -23,7 +23,13 @@ export default function BrowseCropsPage() {
   useEffect(() => {
     async function fetchCrops() {
       try {
-        const data = await getVerifiedListings()
+        const response = await fetch(buildBackendUrl("/api/listings/verified"))
+        const payload = await response.json()
+        const data = response.ok && payload?.success ? payload.listings || [] : []
+        console.log("Consumer verified listings fetched:", data.length, "items")
+        if (data.length > 0) {
+          console.log("Sample listing:", data[0])
+        }
         setCrops(data)
       } catch (error) {
         console.error("Error:", error)
@@ -52,33 +58,31 @@ export default function BrowseCropsPage() {
     }
     setBuying(true)
     try {
-      await createOrder({
-        listingId: selectedCrop.id,
-        buyerId: user.id,
-        buyerName: user.name,
-        buyerPhone: user.phone,
-        sellerId: selectedCrop.farmerId,
-        sellerName: selectedCrop.farmerName,
-        sellerPhone: "",
-        productName: selectedCrop.milletType,
-        quantity: qty,
-        unit: "kg",
-        pricePerKg: selectedCrop.pricePerKg,
-        totalPrice: qty * selectedCrop.pricePerKg,
-        status: "placed",
-        deliveryAddress: "Demo Address, Bangalore",
+      const createResponse = await fetch(buildBackendUrl("/api/orders/create"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          listingId: selectedCrop.id,
+          buyerId: user.id,
+          buyerName: user.name,
+          buyerPhone: user.phone,
+          quantity: qty,
+          deliveryAddress: "Demo Address, Bangalore",
+        }),
       })
-      
-      // Update the listing quantity after successful order
-      const remainingQuantity = selectedCrop.quantity - qty
-      await updateListing(selectedCrop.id, { quantity: remainingQuantity })
+
+      if (!createResponse.ok) {
+        throw new Error("Failed to create order")
+      }
       
       toast.success("Order placed successfully!")
       setSelectedCrop(null)
       setBuyQuantity("")
       
       // Refresh listings - this will automatically filter out zero-quantity items
-      const updated = await getVerifiedListings()
+      const refreshResponse = await fetch(buildBackendUrl("/api/listings/verified"))
+      const refreshPayload = await refreshResponse.json()
+      const updated = refreshResponse.ok && refreshPayload?.success ? refreshPayload.listings || [] : []
       setCrops(updated)
     } catch (error) {
       toast.error("Failed to place order")

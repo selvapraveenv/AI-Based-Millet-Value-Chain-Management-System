@@ -11,6 +11,9 @@ firebase-service-account.json
 *.log
 npm-debug.log*
 
+# Uploads (user-generated content)
+uploads/
+
 # OS
 .DS_Store
 Thumbs.db

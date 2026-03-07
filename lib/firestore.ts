@@ -115,14 +115,65 @@ export async function createUser(data: Omit<UserDoc, 'id' | 'createdAt'>): Promi
 // FARMER FUNCTIONS
 // ============================================
 
+// ============================================
+// USER FUNCTIONS
+// ============================================
+export async function getUserById(userId: string): Promise<UserDoc | null> {
+  try {
+    const userSnap = await getDocs(query(collection(db, 'users'), where('id', '==', userId)));
+    if (!userSnap.empty) {
+      return { id: userSnap.docs[0].id, ...userSnap.docs[0].data() } as UserDoc;
+    }
+    // Fallback: try by document ID
+    const userDoc = await getDoc(doc(db, 'users', userId));
+    if (userDoc.exists()) {
+      return { id: userDoc.id, ...userDoc.data() } as UserDoc;
+    }
+    return null;
+  } catch (error) {
+    console.error('Error fetching user:', error);
+    return null;
+  }
+}
+
+export async function enrichListingWithFarmerData(listing: Listing): Promise<Listing> {
+  try {
+    const farmer = await getUserById(listing.farmerId);
+    if (farmer) {
+      return {
+        ...listing,
+        farmerName: farmer.name,
+        farmerPhone: farmer.phone,
+      };
+    }
+    return listing;
+  } catch (error) {
+    console.error('Error enriching listing with farmer data:', error);
+    return listing;
+  }
+}
+
 export async function getListingsByFarmer(farmerId: string): Promise<Listing[]> {
   try {
     const q = query(collection(db, 'listings'), where('farmerId', '==', farmerId), orderBy('createdAt', 'desc'));
     const snap = await getDocs(q);
-    return snap.docs.map(d => ({ id: d.id, ...d.data() } as Listing));
+    const listings = snap.docs.map(d => ({ id: d.id, ...d.data() } as Listing));
+    // Enrich with actual farmer data
+    return await Promise.all(listings.map(enrichListingWithFarmerData));
   } catch {
+    // Fallback if orderBy index doesn't exist
     const snap = await getDocs(collection(db, 'listings'));
-    return snap.docs.filter(d => d.data().farmerId === farmerId).map(d => ({ id: d.id, ...d.data() } as Listing));
+    const results = snap.docs
+      .filter(d => d.data().farmerId === farmerId)
+      .map(d => ({ id: d.id, ...d.data() } as Listing));
+    // Sort by createdAt descending
+    const sorted = results.sort((a, b) => {
+      const timeA = a.createdAt?.toDate?.() || new Date(0);
+      const timeB = b.createdAt?.toDate?.() || new Date(0);
+      return timeB.getTime() - timeA.getTime();
+    });
+    // Enrich with actual farmer data
+    return await Promise.all(sorted.map(enrichListingWithFarmerData));
   }
 }
 
@@ -218,9 +269,11 @@ export async function getPendingVerifications(taluks: string[]): Promise<Listing
     const snap = await getDocs(collection(db, 'listings'));
     // Normalize taluks for case-insensitive comparison
     const normalizedTaluks = taluks.map(t => t.toLowerCase().trim());
-    return snap.docs
+    const pending = snap.docs
       .map(d => ({ id: d.id, ...d.data() } as Listing))
       .filter(l => l.verificationStatus === 'pending' && l.taluk && normalizedTaluks.includes(l.taluk.toLowerCase().trim()));
+    // Enrich with actual farmer data from USERS collection
+    return await Promise.all(pending.map(enrichListingWithFarmerData));
   } catch {
     return [];
   }
@@ -228,10 +281,17 @@ export async function getPendingVerifications(taluks: string[]): Promise<Listing
 
 export async function getVerifiedByShg(shgId: string): Promise<Listing[]> {
   try {
-    const snap = await getDocs(query(collection(db, 'listings'), where('verifiedBy', '==', shgId)));
-    return snap.docs.map(d => ({ id: d.id, ...d.data() } as Listing));
+    const snap = await getDocs(query(collection(db, 'listings'), where('verifiedBy', '==', shgId), where('verificationStatus', '==', 'verified')));
+    const listings = snap.docs.map(d => ({ id: d.id, ...d.data() } as Listing));
+    // Enrich with actual farmer data
+    return await Promise.all(listings.map(enrichListingWithFarmerData));
   } catch {
-    return [];
+    const snap = await getDocs(collection(db, 'listings'));
+    const listings = snap.docs
+      .map(d => ({ id: d.id, ...d.data() } as Listing))
+      .filter(l => l.verifiedBy === shgId && l.verificationStatus === 'verified');
+    // Enrich with actual farmer data
+    return await Promise.all(listings.map(enrichListingWithFarmerData));
   }
 }
 
@@ -268,16 +328,23 @@ export async function getSHGDashboardStats(shgId: string, taluks: string[]) {
   try {
     const allListings = await getDocs(collection(db, 'listings'));
     const listings = allListings.docs.map(d => ({ id: d.id, ...d.data() })) as Listing[];
-    const pending = listings.filter(l => l.verificationStatus === 'pending' && taluks.includes(l.taluk));
+    const normalizedTaluks = taluks.map(t => t.toLowerCase().trim());
+    const pending = listings.filter(l => 
+      l.verificationStatus === 'pending' && 
+      l.taluk && 
+      normalizedTaluks.includes(l.taluk.toLowerCase().trim())
+    );
     const verified = listings.filter(l => l.verifiedBy === shgId && l.verificationStatus === 'verified');
     const rejected = listings.filter(l => l.verifiedBy === shgId && l.verificationStatus === 'rejected');
+    console.log('SHG Dashboard Stats:', { shgId, taluks, pendingCount: pending.length, verifiedCount: verified.length, rejectedCount: rejected.length });
     return {
       pendingCount: pending.length,
       verifiedCount: verified.length,
       rejectedCount: rejected.length,
       totalReviewed: verified.length + rejected.length,
     };
-  } catch {
+  } catch (error) {
+    console.error('Error in getSHGDashboardStats:', error);
     return { pendingCount: 0, verifiedCount: 0, rejectedCount: 0, totalReviewed: 0 };
   }
 }
@@ -289,14 +356,18 @@ export async function getSHGDashboardStats(shgId: string, taluks: string[]) {
 export async function getVerifiedListings(): Promise<Listing[]> {
   try {
     const snap = await getDocs(query(collection(db, 'listings'), where('verificationStatus', '==', 'verified'), where('status', '==', 'active')));
-    return snap.docs
+    const listings = snap.docs
       .map(d => ({ id: d.id, ...d.data() } as Listing))
       .filter(l => l.quantity && l.quantity > 0);
+    // Enrich with actual farmer data from USERS collection
+    return await Promise.all(listings.map(enrichListingWithFarmerData));
   } catch {
     const snap = await getDocs(collection(db, 'listings'));
-    return snap.docs
+    const listings = snap.docs
       .map(d => ({ id: d.id, ...d.data() } as Listing))
       .filter(l => l.verificationStatus === 'verified' && l.status === 'active' && l.quantity && l.quantity > 0);
+    // Enrich with actual farmer data from USERS collection
+    return await Promise.all(listings.map(enrichListingWithFarmerData));
   }
 }
 

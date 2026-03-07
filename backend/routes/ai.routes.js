@@ -1,25 +1,26 @@
 /**
  * AI Routes - Handles AI-based logic endpoints
- * 
+ *
  * Endpoints:
  * 1. POST /api/ai/price-suggestion - Calculate optimal price for millet
  * 2. GET  /api/ai/demand-forecast - Forecast demand for different millets
  * 3. POST /api/ai/quality-check - Detect quality anomalies
  */
 
-import express from 'express';
+import express from "express";
 import {
   calculatePriceSuggestion,
   forecastDemand,
-  performQualityCheck
-} from '../services/ai.service.js';
+  performQualityCheck,
+  getSmartProductMatches,
+} from "../services/ai.service.js";
 
 const router = express.Router();
 
 /**
  * POST /api/ai/price-suggestion
  * Calculate optimal price based on market conditions
- * 
+ *
  * Body: {
  *   milletType: string (e.g., "Finger Millet", "Pearl Millet")
  *   quantity: number (in kg)
@@ -27,15 +28,15 @@ const router = express.Router();
  *   quality: string (optional: "Premium", "Standard", "Basic")
  * }
  */
-router.post('/price-suggestion', async (req, res) => {
+router.post("/price-suggestion", async (req, res) => {
   try {
     const { milletType, quantity, location, quality } = req.body;
 
     // Validate input
     if (!milletType || !quantity || !location) {
       return res.status(400).json({
-        error: 'Missing required fields',
-        required: ['milletType', 'quantity', 'location']
+        error: "Missing required fields",
+        required: ["milletType", "quantity", "location"],
       });
     }
 
@@ -44,15 +45,15 @@ router.post('/price-suggestion', async (req, res) => {
       milletType,
       quantity,
       location,
-      quality: quality || 'Standard'
+      quality: quality || "Standard",
     });
 
     res.json(result);
   } catch (error) {
-    console.error('Price suggestion error:', error);
+    console.error("Price suggestion error:", error);
     res.status(500).json({
-      error: 'Failed to calculate price suggestion',
-      message: error.message
+      error: "Failed to calculate price suggestion",
+      message: error.message,
     });
   }
 });
@@ -60,27 +61,27 @@ router.post('/price-suggestion', async (req, res) => {
 /**
  * GET /api/ai/demand-forecast
  * Forecast demand levels for all millet types
- * 
+ *
  * Query params:
  *   location: string (optional)
  *   period: string (optional: "weekly", "monthly", "quarterly")
  */
-router.get('/demand-forecast', async (req, res) => {
+router.get("/demand-forecast", async (req, res) => {
   try {
     const { location, period } = req.query;
 
     // Call AI service to forecast demand
     const forecast = await forecastDemand({
-      location: location || 'All India',
-      period: period || 'monthly'
+      location: location || "All India",
+      period: period || "monthly",
     });
 
     res.json(forecast);
   } catch (error) {
-    console.error('Demand forecast error:', error);
+    console.error("Demand forecast error:", error);
     res.status(500).json({
-      error: 'Failed to generate demand forecast',
-      message: error.message
+      error: "Failed to generate demand forecast",
+      message: error.message,
     });
   }
 });
@@ -88,7 +89,7 @@ router.get('/demand-forecast', async (req, res) => {
 /**
  * POST /api/ai/quality-check
  * Detect quality anomalies in a batch
- * 
+ *
  * Body: {
  *   batchId: string
  *   milletType: string
@@ -100,15 +101,15 @@ router.get('/demand-forecast', async (req, res) => {
  *   expectedWeight: number (expected weight in kg)
  * }
  */
-router.post('/quality-check', async (req, res) => {
+router.post("/quality-check", async (req, res) => {
   try {
     const batchData = req.body;
 
     // Validate required fields
     if (!batchData.batchId || !batchData.milletType) {
       return res.status(400).json({
-        error: 'Missing required fields',
-        required: ['batchId', 'milletType']
+        error: "Missing required fields",
+        required: ["batchId", "milletType"],
       });
     }
 
@@ -117,10 +118,42 @@ router.post('/quality-check', async (req, res) => {
 
     res.json(qualityResult);
   } catch (error) {
-    console.error('Quality check error:', error);
+    console.error("Quality check error:", error);
     res.status(500).json({
-      error: 'Failed to perform quality check',
-      message: error.message
+      error: "Failed to perform quality check",
+      message: error.message,
+    });
+  }
+});
+
+/**
+ * POST /api/ai/smart-match
+ * Find top millet listings for consumer preferences
+ *
+ * Body: {
+ *   maxPrice: number
+ *   preferredQuality: string ("Premium" | "Standard" | "Basic")
+ *   milletTypes?: string[]
+ *   maxDistance?: number
+ * }
+ */
+router.post("/smart-match", async (req, res) => {
+  try {
+    const preferences = req.body || {};
+
+    if (!preferences.maxPrice || Number(preferences.maxPrice) <= 0) {
+      return res.status(400).json({
+        error: "Missing or invalid maxPrice",
+      });
+    }
+
+    const result = await getSmartProductMatches(preferences);
+    res.json(result);
+  } catch (error) {
+    console.error("Smart match error:", error);
+    res.status(500).json({
+      error: "Failed to generate smart matches",
+      message: error.message,
     });
   }
 });
