@@ -10,6 +10,7 @@
 import express from "express";
 import {
   calculatePriceSuggestion,
+  getPriceRecommendation,
   forecastDemand,
   performQualityCheck,
   getSmartProductMatches,
@@ -53,6 +54,55 @@ router.post("/price-suggestion", async (req, res) => {
     console.error("Price suggestion error:", error);
     res.status(500).json({
       error: "Failed to calculate price suggestion",
+      message: error.message,
+    });
+  }
+});
+
+/**
+ * POST /api/ai/price-recommendation
+ * Generate AI-powered listing price recommendation before SHG verification.
+ *
+ * Body: {
+ *   milletType: string
+ *   quantity: number (kg)
+ *   location: string
+ *   quality?: string
+ *   taluk?: string
+ * }
+ *
+ * Response: {
+ *   recommendedPricePerKg: number,
+ *   suggestedPriceRange: { min: number, max: number },
+ *   demandLevel: "High" | "Medium" | "Low",
+ *   expectedSaleTime: string,
+ *   reasoning: string
+ * }
+ */
+router.post("/price-recommendation", async (req, res) => {
+  try {
+    const { milletType, quantity, location, quality, taluk } = req.body || {};
+
+    if (!milletType || !quantity || !location) {
+      return res.status(400).json({
+        error: "Missing required fields",
+        required: ["milletType", "quantity", "location"],
+      });
+    }
+
+    const recommendation = await getPriceRecommendation({
+      milletType,
+      quantity: Number(quantity),
+      location,
+      quality,
+      taluk,
+    });
+
+    return res.json(recommendation);
+  } catch (error) {
+    console.error("Price recommendation error:", error);
+    return res.status(500).json({
+      error: "Failed to generate price recommendation",
       message: error.message,
     });
   }

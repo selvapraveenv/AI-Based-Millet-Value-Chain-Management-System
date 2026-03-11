@@ -1,51 +1,30 @@
 /**
- * AI Service - Rule-based AI logic for price, demand, and quality
+ * AI Service - Data-driven AI logic for price, demand, and quality
  *
  * This service implements:
- * 1. Price suggestion based on market rules
- * 2. Demand forecasting using historical data
+ * 1. Price suggestion from platform and public market data
+ * 2. Demand forecasting using observed historical data
  * 3. Quality anomaly detection
  */
 
 import { getFirestore, Collections } from "../config/firebase.js";
 
-/**
- * BASE PRICES (Rs per kg) - Market baseline
- * These are standard market prices used as reference
- */
-const BASE_PRICES = {
-  "Finger Millet": 45,
-  "Pearl Millet": 40,
-  "Foxtail Millet": 55,
-  "Little Millet": 50,
-  "Kodo Millet": 52,
-  "Barnyard Millet": 48,
-  "Proso Millet": 46,
-  "Browntop Millet": 54,
-};
-
-/**
- * LOCATION MULTIPLIERS - Regional demand factors
- * Higher multiplier = higher demand in that region
- */
-const LOCATION_FACTORS = {
-  Karnataka: 1.1,
-  "Tamil Nadu": 1.05,
-  "Andhra Pradesh": 1.08,
-  Telangana: 1.07,
-  Maharashtra: 1.0,
-  Kerala: 1.15,
-  Other: 0.95,
-};
-
-/**
- * QUALITY MULTIPLIERS
- * Premium quality commands higher prices
- */
-const QUALITY_FACTORS = {
-  Premium: 1.2,
-  Standard: 1.0,
-  Basic: 0.85,
+const EXTERNAL_MARKET_CONFIG = {
+  timeoutMs: Number(process.env.EXTERNAL_MARKET_TIMEOUT_MS || 6000),
+  commodityOnlineMilletsUrl:
+    process.env.COMMODITYONLINE_MILLETS_URL ||
+    "https://www.commodityonline.com/mandiprices/millets",
+  agmarknetPriceUrl: process.env.AGMARKNET_PRICE_URL || "",
+  dataGovApiBaseUrl:
+    process.env.DATA_GOV_API_BASE_URL || "https://api.data.gov.in/resource",
+  dataGovApiKey: process.env.DATA_GOV_API_KEY || "",
+  dataGovMarketResourceIds: (process.env.DATA_GOV_MARKET_RESOURCE_IDS || "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean),
+  extraHtmlSources: parseConfiguredMarketSources(
+    process.env.EXTRA_MARKET_SOURCE_URLS || "",
+  ),
 };
 
 const QUALITY_SCORE_MATRIX = {
@@ -53,6 +32,19 @@ const QUALITY_SCORE_MATRIX = {
   Standard: { Standard: 100, Premium: 90, Basic: 70 },
   Basic: { Basic: 100, Standard: 80, Premium: 70 },
 };
+
+function parseConfiguredMarketSources(value) {
+  return String(value || "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .map((entry) => {
+      const [name, url] = entry.split("|").map((part) => part.trim());
+      if (!name || !url) return null;
+      return { name, url };
+    })
+    .filter(Boolean);
+}
 
 function toDateSafe(value) {
   if (!value) return null;
@@ -97,6 +89,968 @@ function buildSmartMatchRecommendation(matchesFound, topMatch) {
     return "No close matches found. Try increasing max price or selecting more millet types.";
   }
   return `Top match: ${topMatch.farmerName}'s ${topMatch.milletType} at ₹${topMatch.pricePerKg}/kg (${topMatch.matchScore}% match)`;
+}
+
+function round2(value) {
+  return Math.round(Number(value || 0) * 100) / 100;
+}
+
+function parseNumber(value) {
+  const normalized = String(value || "")
+    .replace(/,/g, "")
+    .trim();
+  const parsed = Number.parseFloat(normalized);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function normalizeText(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function unique(values) {
+  return [...new Set(values.filter(Boolean))];
+}
+
+function median(values) {
+  if (!values.length) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0
+    ? (sorted[middle - 1] + sorted[middle]) / 2
+    : sorted[middle];
+}
+
+function quantile(values, percentile) {
+  if (!values.length) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const index = (sorted.length - 1) * percentile;
+  const lower = Math.floor(index);
+  const upper = Math.ceil(index);
+  if (lower === upper) return sorted[lower];
+  const weight = index - lower;
+  return sorted[lower] * (1 - weight) + sorted[upper] * weight;
+}
+
+function summarizePriceSeries(values) {
+  const sanitized = values.filter(
+    (price) => Number.isFinite(price) && price > 0,
+  );
+  if (!sanitized.length) {
+    return {
+      count: 0,
+      min: 0,
+      max: 0,
+      average: 0,
+      median: 0,
+      q25: 0,
+      q75: 0,
+      volatility: 0,
+    };
+  }
+
+  return {
+    count: sanitized.length,
+    min: round2(Math.min(...sanitized)),
+    max: round2(Math.max(...sanitized)),
+    average: round2(average(sanitized)),
+    median: round2(median(sanitized)),
+    q25: round2(quantile(sanitized, 0.25)),
+    q75: round2(quantile(sanitized, 0.75)),
+    volatility:
+      sanitized.length > 1 && average(sanitized) > 0
+        ? round2((stdDev(sanitized) / average(sanitized)) * 100)
+        : 0,
+  };
+}
+
+function buildLocationTerms({ location, taluk }) {
+  return unique(
+    [location, taluk]
+      .flatMap((value) => [
+        String(value || "").trim(),
+        ...String(value || "")
+          .split(/[\/,()-]/)
+          .map((part) => part.trim()),
+      ])
+      .filter((value) => value.length >= 3),
+  );
+}
+
+function buildCommodityTerms(milletType) {
+  const full = String(milletType || "").trim();
+  const bracketMatch = full.match(/\(([^)]+)\)/);
+  const bracketValue = bracketMatch ? bracketMatch[1].trim() : "";
+  const genericFree = full.replace(/\([^)]*\)/g, " ").trim();
+
+  return unique(
+    [full, bracketValue, genericFree]
+      .flatMap((value) => [
+        value,
+        ...String(value || "")
+          .split(/[\/,()-]/)
+          .map((part) => part.trim()),
+      ])
+      .map((value) => value.replace(/\bmillets?\b/gi, "").trim())
+      .filter((value) => value.length >= 3),
+  );
+}
+
+function matchesTerms(text, terms) {
+  if (!terms.length) return true;
+  const normalized = normalizeText(text);
+  return terms.some((term) => normalized.includes(normalizeText(term)));
+}
+
+function stripHtml(html) {
+  return String(html || "")
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function escapeRegExp(value) {
+  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+async function fetchTextWithTimeout(url, timeoutMs) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        "User-Agent": "Mozilla/5.0 MilletChain/1.0",
+        Accept: "text/html,application/json;q=0.9,*/*;q=0.8",
+      },
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch ${url}: ${response.status}`);
+    }
+
+    return await response.text();
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function extractLabeledQuintalPrice(text, label) {
+  const pattern = new RegExp(
+    `${escapeRegExp(label)}[\\s\\S]{0,250}?(?:₹|Rs\\.?)\\s*([\\d,]+(?:\\.\\d+)?)\\s*\/\\s*Quintal`,
+    "i",
+  );
+  const match = text.match(pattern);
+  return match ? parseNumber(match[1]) / 100 : 0;
+}
+
+function extractUpdatedAt(text) {
+  const match = text.match(
+    /(?:Last price updated|Price updated)\s*:?\s*([^\n<]{4,80})/i,
+  );
+  return match ? match[1].trim() : "";
+}
+
+function extractUnitPrices(text) {
+  return [
+    ...String(text || "").matchAll(
+      /(?:₹|Rs\.?)\s*([\d,]+(?:\.\d+)?)\s*(?:\/-)?\s*(?:\/\s*)?(Quintal|Kg|kg)\b/gi,
+    ),
+  ]
+    .map((match) => {
+      const value = parseNumber(match[1]);
+      const unit = String(match[2] || "").toLowerCase();
+      if (!value) return 0;
+      return unit === "quintal" ? value / 100 : value;
+    })
+    .filter((price) => price > 0);
+}
+
+function extractContextualPrices(text, searchTerms) {
+  if (!searchTerms.length) return extractUnitPrices(text).slice(0, 20);
+
+  const prices = [];
+  for (const term of searchTerms) {
+    const pattern = new RegExp(`.{0,220}${escapeRegExp(term)}.{0,220}`, "gi");
+    for (const match of text.matchAll(pattern)) {
+      prices.push(...extractUnitPrices(match[0]));
+    }
+  }
+
+  return unique(prices.map((price) => round2(price))).filter(
+    (price) => price > 0,
+  );
+}
+
+async function fetchJsonWithTimeout(url, timeoutMs) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        Accept: "application/json,text/plain;q=0.9,*/*;q=0.8",
+      },
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch ${url}: ${response.status}`);
+    }
+
+    return await response.json();
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function collectCommodityOnlineMarketSignal({ locationTerms }) {
+  const html = await fetchTextWithTimeout(
+    EXTERNAL_MARKET_CONFIG.commodityOnlineMilletsUrl,
+    EXTERNAL_MARKET_CONFIG.timeoutMs,
+  );
+  const text = stripHtml(html);
+
+  const averagePricePerKg = extractLabeledQuintalPrice(text, "Average Price");
+  const minPricePerKg = extractLabeledQuintalPrice(text, "Lowest Market Price");
+  const maxPricePerKg = extractLabeledQuintalPrice(
+    text,
+    "Costliest Market Price",
+  );
+  const updatedAt = extractUpdatedAt(text);
+
+  const locationPrices = extractContextualPrices(text, locationTerms);
+  const effectiveSamples = locationPrices.length
+    ? locationPrices
+    : [averagePricePerKg].filter((price) => price > 0);
+
+  if (!effectiveSamples.length && !averagePricePerKg) {
+    return null;
+  }
+
+  return {
+    source: "CommodityOnline",
+    url: EXTERNAL_MARKET_CONFIG.commodityOnlineMilletsUrl,
+    updatedAt,
+    averagePricePerKg: round2(
+      locationPrices.length ? average(locationPrices) : averagePricePerKg,
+    ),
+    range: {
+      min: round2(
+        locationPrices.length
+          ? Math.min(...locationPrices)
+          : minPricePerKg || averagePricePerKg,
+      ),
+      max: round2(
+        locationPrices.length
+          ? Math.max(...locationPrices)
+          : maxPricePerKg || averagePricePerKg,
+      ),
+    },
+    matchedLocation: locationPrices.length
+      ? locationTerms.join(", ")
+      : "all-markets",
+    samplePricesPerKg: effectiveSamples.map((price) => round2(price)),
+  };
+}
+
+async function collectConfiguredHtmlMarketSignal({ name, url, locationTerms }) {
+  const html = await fetchTextWithTimeout(
+    url,
+    EXTERNAL_MARKET_CONFIG.timeoutMs,
+  );
+  const text = stripHtml(html);
+  const samplePricesPerKg = extractContextualPrices(text, locationTerms);
+  if (!samplePricesPerKg.length) return null;
+
+  const stats = summarizePriceSeries(samplePricesPerKg);
+  return {
+    source: name,
+    url,
+    updatedAt: extractUpdatedAt(text),
+    averagePricePerKg: stats.average,
+    range: {
+      min: stats.min,
+      max: stats.max,
+    },
+    matchedLocation: locationTerms.join(", ") || "all-markets",
+    samplePricesPerKg,
+  };
+}
+
+async function collectDataGovMarketSignals({ milletType, locationTerms }) {
+  if (
+    !EXTERNAL_MARKET_CONFIG.dataGovApiKey ||
+    !EXTERNAL_MARKET_CONFIG.dataGovMarketResourceIds.length
+  ) {
+    return [];
+  }
+
+  const commodityTerms = buildCommodityTerms(milletType);
+  const sources = [];
+
+  for (const resourceId of EXTERNAL_MARKET_CONFIG.dataGovMarketResourceIds) {
+    try {
+      const url = `${EXTERNAL_MARKET_CONFIG.dataGovApiBaseUrl}/${resourceId}?api-key=${encodeURIComponent(EXTERNAL_MARKET_CONFIG.dataGovApiKey)}&format=json&limit=100`;
+      const payload = await fetchJsonWithTimeout(
+        url,
+        EXTERNAL_MARKET_CONFIG.timeoutMs,
+      );
+
+      const records = Array.isArray(payload?.records) ? payload.records : [];
+      const matchedRecords = records.filter((record) => {
+        const allValues = Object.values(record || {}).join(" ");
+        return (
+          matchesTerms(allValues, commodityTerms) &&
+          matchesTerms(allValues, locationTerms)
+        );
+      });
+
+      const samplePricesPerKg = matchedRecords
+        .map((record) => {
+          const modalPrice = parseNumber(
+            record.modal_price ||
+              record.modal ||
+              record.price ||
+              record.max_price,
+          );
+          return modalPrice > 0 ? modalPrice / 100 : 0;
+        })
+        .filter((price) => price > 0)
+        .slice(0, 30)
+        .map((price) => round2(price));
+
+      if (!samplePricesPerKg.length) continue;
+
+      const stats = summarizePriceSeries(samplePricesPerKg);
+      sources.push({
+        source: `DataGov:${resourceId}`,
+        url,
+        updatedAt: payload?.updated_date || payload?.last_updated || "",
+        averagePricePerKg: stats.average,
+        range: {
+          min: stats.min,
+          max: stats.max,
+        },
+        matchedLocation: locationTerms.join(", ") || "all-markets",
+        samplePricesPerKg,
+      });
+    } catch (error) {
+      console.warn(
+        `DataGov market signal fetch failed for ${resourceId}:`,
+        error.message,
+      );
+    }
+  }
+
+  return sources;
+}
+
+async function collectExternalMarketSignals({ milletType, location, taluk }) {
+  const locationTerms = buildLocationTerms({ location, taluk });
+  const sources = [];
+  const prices = [];
+
+  try {
+    const commodityOnline = await collectCommodityOnlineMarketSignal({
+      locationTerms,
+    });
+    if (commodityOnline) {
+      sources.push(commodityOnline);
+      prices.push(...commodityOnline.samplePricesPerKg);
+    }
+  } catch (error) {
+    console.warn("CommodityOnline market signal fetch failed:", error.message);
+  }
+
+  if (EXTERNAL_MARKET_CONFIG.agmarknetPriceUrl) {
+    try {
+      const agmarknet = await collectConfiguredHtmlMarketSignal({
+        name: "Agmarknet",
+        url: EXTERNAL_MARKET_CONFIG.agmarknetPriceUrl,
+        locationTerms,
+      });
+      if (agmarknet) {
+        sources.push(agmarknet);
+        prices.push(...agmarknet.samplePricesPerKg);
+      }
+    } catch (error) {
+      console.warn("Agmarknet market signal fetch failed:", error.message);
+    }
+  }
+
+  const dataGovSources = await collectDataGovMarketSignals({
+    milletType,
+    locationTerms,
+  });
+  dataGovSources.forEach((source) => {
+    sources.push(source);
+    prices.push(...source.samplePricesPerKg);
+  });
+
+  await Promise.all(
+    EXTERNAL_MARKET_CONFIG.extraHtmlSources.map(async (sourceConfig) => {
+      try {
+        const source = await collectConfiguredHtmlMarketSignal({
+          name: sourceConfig.name,
+          url: sourceConfig.url,
+          locationTerms,
+        });
+        if (source) {
+          sources.push(source);
+          prices.push(...source.samplePricesPerKg);
+        }
+      } catch (error) {
+        console.warn(
+          `${sourceConfig.name} market signal fetch failed:`,
+          error.message,
+        );
+      }
+    }),
+  );
+
+  return {
+    prices: unique(prices.map((price) => round2(price))).filter(
+      (price) => price > 0,
+    ),
+    sources,
+  };
+}
+
+function parseGeminiJson(text) {
+  if (!text) return null;
+
+  const fencedMatch = text.match(/```json\s*([\s\S]*?)```/i);
+  const candidate = fencedMatch ? fencedMatch[1] : text;
+
+  try {
+    return JSON.parse(candidate);
+  } catch {
+    const objectMatch = candidate.match(/\{[\s\S]*\}/);
+    if (!objectMatch) return null;
+    try {
+      return JSON.parse(objectMatch[0]);
+    } catch {
+      return null;
+    }
+  }
+}
+
+function normalizeDemandLevel(level) {
+  const normalized = String(level || "").toLowerCase();
+  if (normalized === "high") return "High";
+  if (normalized === "low") return "Low";
+  return "Medium";
+}
+
+function inferExpectedSaleTime({
+  quantity,
+  recentOrderQuantity,
+  observationDays,
+}) {
+  const dailyVelocity =
+    recentOrderQuantity > 0
+      ? recentOrderQuantity / Math.max(observationDays || 30, 1)
+      : 0;
+
+  if (dailyVelocity <= 0) {
+    return "Insufficient recent demand data";
+  }
+
+  const estimatedDays = Math.max(1, Math.ceil(quantity / dailyVelocity));
+  if (estimatedDays < 7)
+    return `${estimatedDays} day${estimatedDays === 1 ? "" : "s"}`;
+  if (estimatedDays < 45) {
+    const weeks = Math.ceil(estimatedDays / 7);
+    return `${weeks} week${weeks === 1 ? "" : "s"}`;
+  }
+  const months = Math.ceil(estimatedDays / 30);
+  return `${months} month${months === 1 ? "" : "s"}`;
+}
+
+function sanitizePriceRecommendation(payload, fallback, quantity) {
+  const recommended = Number(payload?.recommendedPricePerKg);
+  const min = Number(payload?.suggestedPriceRange?.min);
+  const max = Number(payload?.suggestedPriceRange?.max);
+
+  const safeRecommended =
+    Number.isFinite(recommended) && recommended > 0
+      ? round2(recommended)
+      : fallback.recommendedPricePerKg;
+
+  const safeMin =
+    Number.isFinite(min) && min > 0
+      ? round2(Math.min(min, safeRecommended))
+      : fallback.suggestedPriceRange.min;
+  const safeMax =
+    Number.isFinite(max) && max > 0
+      ? round2(Math.max(max, safeRecommended))
+      : fallback.suggestedPriceRange.max;
+
+  return {
+    recommendedPricePerKg: safeRecommended,
+    suggestedPriceRange: {
+      min: safeMin,
+      max: safeMax,
+    },
+    demandLevel: normalizeDemandLevel(
+      payload?.demandLevel || fallback.demandLevel,
+    ),
+    expectedSaleTime:
+      String(payload?.expectedSaleTime || "").trim() ||
+      fallback.expectedSaleTime,
+    reasoning: String(payload?.reasoning || "").trim() || fallback.reasoning,
+  };
+}
+
+function calculateHeuristicPriceRecommendation({
+  recentMarketplacePrices,
+  historicalTransactionPrices,
+  externalMarketPrices,
+  demandLevel,
+  recentOrderQuantity,
+  quantity,
+}) {
+  const observedPrices = [
+    ...recentMarketplacePrices,
+    ...historicalTransactionPrices,
+    ...externalMarketPrices,
+  ].filter((price) => price > 0);
+
+  if (!observedPrices.length) {
+    throw new Error("Insufficient market data to generate recommendation");
+  }
+
+  const stats = summarizePriceSeries(observedPrices);
+  const recommendedPricePerKg = stats.median || stats.average;
+  const suggestedMin = stats.q25 || stats.min || recommendedPricePerKg;
+  const suggestedMax = stats.q75 || stats.max || recommendedPricePerKg;
+
+  return {
+    recommendedPricePerKg: round2(recommendedPricePerKg),
+    suggestedPriceRange: {
+      min: round2(Math.min(suggestedMin, recommendedPricePerKg)),
+      max: round2(Math.max(suggestedMax, recommendedPricePerKg)),
+    },
+    demandLevel,
+    expectedSaleTime: inferExpectedSaleTime({
+      quantity,
+      recentOrderQuantity,
+      observationDays: 30,
+    }),
+    reasoning: `Recommendation is derived from observed platform listings, transaction history, and live public market prices near the selected market area.`,
+  };
+}
+
+async function collectRecentMarketplacePrices(db, milletType, location, taluk) {
+  let listings = [];
+  const locationTerms = buildLocationTerms({ location, taluk });
+
+  try {
+    const snap = await db
+      .collection(Collections.LISTINGS)
+      .where("milletType", "==", milletType)
+      .where("status", "==", "active")
+      .orderBy("createdAt", "desc")
+      .limit(60)
+      .get();
+
+    listings = snap.docs.map((doc) => doc.data());
+  } catch {
+    const fallbackSnap = await db.collection(Collections.LISTINGS).get();
+    listings = fallbackSnap.docs
+      .map((doc) => doc.data())
+      .filter(
+        (item) => item.milletType === milletType && item.status === "active",
+      )
+      .sort((a, b) => {
+        const timeA = toDateSafe(a.createdAt)?.getTime() || 0;
+        const timeB = toDateSafe(b.createdAt)?.getTime() || 0;
+        return timeB - timeA;
+      })
+      .slice(0, 60);
+  }
+
+  const regional = listings
+    .filter((item) =>
+      matchesTerms(
+        [item.location, item.taluk, item.market, item.district, item.state]
+          .filter(Boolean)
+          .join(" "),
+        locationTerms,
+      ),
+    )
+    .map((item) => Number(item.pricePerKg || 0))
+    .filter((price) => price > 0);
+
+  if (regional.length >= 5) return regional;
+
+  return listings
+    .map((item) => Number(item.pricePerKg || 0))
+    .filter((price) => price > 0)
+    .slice(0, 40);
+}
+
+async function collectHistoricalTransactionPrices(
+  db,
+  milletType,
+  location,
+  taluk,
+) {
+  const ninetyDaysAgo = Date.now() - 90 * 24 * 60 * 60 * 1000;
+  let orders = [];
+  const locationTerms = buildLocationTerms({ location, taluk });
+
+  try {
+    const snap = await db
+      .collection(Collections.ORDERS)
+      .where("milletType", "==", milletType)
+      .orderBy("createdAt", "desc")
+      .limit(120)
+      .get();
+    orders = snap.docs.map((doc) => doc.data());
+  } catch {
+    const fallbackSnap = await db.collection(Collections.ORDERS).get();
+    orders = fallbackSnap.docs
+      .map((doc) => doc.data())
+      .filter((item) => item.milletType === milletType)
+      .sort((a, b) => {
+        const timeA = toDateSafe(a.createdAt || a.orderDate)?.getTime() || 0;
+        const timeB = toDateSafe(b.createdAt || b.orderDate)?.getTime() || 0;
+        return timeB - timeA;
+      })
+      .slice(0, 120);
+  }
+
+  const regionalRecent = orders
+    .filter((order) => {
+      const orderTime = toDateSafe(
+        order.createdAt || order.orderDate,
+      )?.getTime();
+      const inRange = orderTime ? orderTime >= ninetyDaysAgo : false;
+      const isRegional = matchesTerms(
+        [order.location, order.taluk, order.market, order.district, order.state]
+          .filter(Boolean)
+          .join(" "),
+        locationTerms,
+      );
+      return inRange && isRegional;
+    })
+    .map((order) => Number(order.pricePerKg || 0))
+    .filter((price) => price > 0);
+
+  if (regionalRecent.length >= 3) return regionalRecent;
+
+  const fallbackTransactionPrices = orders
+    .filter((order) => {
+      const orderTime = toDateSafe(
+        order.createdAt || order.orderDate,
+      )?.getTime();
+      return orderTime ? orderTime >= ninetyDaysAgo : false;
+    })
+    .map((order) => Number(order.pricePerKg || 0))
+    .filter((price) => price > 0);
+
+  if (fallbackTransactionPrices.length) return fallbackTransactionPrices;
+
+  const priceHistorySnap = await db
+    .collection(Collections.PRICE_HISTORY)
+    .where("milletType", "==", milletType)
+    .get();
+
+  return priceHistorySnap.docs
+    .map((doc) => Number(doc.data().price || 0))
+    .filter((price) => price > 0)
+    .slice(-60);
+}
+
+async function calculateRegionalDemandSummary(db, milletType, location, taluk) {
+  const thirtyDaysAgo = Date.now() - 30 * 24 * 60 * 60 * 1000;
+  const locationTerms = buildLocationTerms({ location, taluk });
+
+  const [ordersSnap, listingsSnap] = await Promise.all([
+    db
+      .collection(Collections.ORDERS)
+      .where("milletType", "==", milletType)
+      .get(),
+    db
+      .collection(Collections.LISTINGS)
+      .where("milletType", "==", milletType)
+      .get(),
+  ]);
+
+  const recentRegionalOrders = ordersSnap.docs
+    .map((doc) => doc.data())
+    .filter((order) => {
+      const orderTime = toDateSafe(
+        order.createdAt || order.orderDate,
+      )?.getTime();
+      if (!orderTime || orderTime < thirtyDaysAgo) return false;
+      return matchesTerms(
+        [order.location, order.taluk, order.market, order.district, order.state]
+          .filter(Boolean)
+          .join(" "),
+        locationTerms,
+      );
+    });
+
+  const regionalActiveListings = listingsSnap.docs
+    .map((doc) => doc.data())
+    .filter(
+      (listing) =>
+        listing.status === "active" &&
+        matchesTerms(
+          [
+            listing.location,
+            listing.taluk,
+            listing.market,
+            listing.district,
+            listing.state,
+          ]
+            .filter(Boolean)
+            .join(" "),
+          locationTerms,
+        ),
+    );
+
+  const recentOrderCount = recentRegionalOrders.length;
+  const activeSupplyCount = regionalActiveListings.length;
+  const recentOrderQuantity = recentRegionalOrders.reduce(
+    (sum, order) => sum + Number(order.quantity || 0),
+    0,
+  );
+  const activeSupplyQuantity = regionalActiveListings.reduce(
+    (sum, listing) => sum + Number(listing.quantity || 0),
+    0,
+  );
+  const demandPressure = activeSupplyCount
+    ? recentOrderCount / activeSupplyCount
+    : recentOrderCount;
+
+  const demandLevel =
+    demandPressure >= 1.3 || recentOrderCount >= 15
+      ? "High"
+      : demandPressure >= 0.7 || recentOrderCount >= 6
+        ? "Medium"
+        : "Low";
+
+  return {
+    demandLevel,
+    recentOrderCount,
+    recentOrderQuantity,
+    activeSupplyCount,
+    activeSupplyQuantity,
+    demandPressure: Number(demandPressure.toFixed(2)),
+  };
+}
+
+async function requestGeminiPriceRecommendation({
+  listingInput,
+  baseSuggestedPrice,
+  recentMarketplacePrices,
+  historicalTransactionPrices,
+  externalMarketSignals,
+  regionalDemand,
+}) {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) return null;
+
+  const model = process.env.GEMINI_MODEL || "gemini-1.5-flash";
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+
+  const recentAvg = recentMarketplacePrices.length
+    ? round2(average(recentMarketplacePrices))
+    : 0;
+  const historicalAvg = historicalTransactionPrices.length
+    ? round2(average(historicalTransactionPrices))
+    : 0;
+  const externalAvg = externalMarketSignals.prices.length
+    ? round2(average(externalMarketSignals.prices))
+    : 0;
+  const externalSourcesSummary = externalMarketSignals.sources.length
+    ? externalMarketSignals.sources
+        .map(
+          (source) =>
+            `${source.source}: avg ₹${source.averagePricePerKg}/kg, range ₹${source.range.min}-₹${source.range.max}/kg, scope ${source.matchedLocation}, updated ${source.updatedAt || "unknown"}`,
+        )
+        .join("; ")
+    : "No live public market source available";
+
+  const prompt = `You are an agricultural pricing analyst for millet trading.
+Return only valid JSON (no markdown, no extra text) with this exact schema:
+{
+  "recommendedPricePerKg": number,
+  "suggestedPriceRange": { "min": number, "max": number },
+  "demandLevel": "High" | "Medium" | "Low",
+  "expectedSaleTime": "string",
+  "reasoning": "short explanation"
+}
+
+Listing Input:
+- milletType: ${listingInput.milletType}
+- quantityKg: ${listingInput.quantity}
+- location: ${listingInput.location}
+- quality: ${listingInput.quality}
+- taluk: ${listingInput.taluk || "N/A"}
+
+Observed Central Market Price:
+- observedMedianPricePerKg: ${baseSuggestedPrice}
+
+Market Signals:
+- recentMarketplacePricesCount: ${recentMarketplacePrices.length}
+- recentMarketplaceAvgPrice: ${recentAvg}
+- historicalTransactionPricesCount: ${historicalTransactionPrices.length}
+- historicalTransactionAvgPrice: ${historicalAvg}
+- externalPublicMarketPricesCount: ${externalMarketSignals.prices.length}
+- externalPublicMarketAvgPrice: ${externalAvg}
+- externalPublicMarketSources: ${externalSourcesSummary}
+- demandLevelFromData: ${regionalDemand.demandLevel}
+- recentRegionalOrders: ${regionalDemand.recentOrderCount}
+- recentRegionalOrderQuantityKg: ${regionalDemand.recentOrderQuantity}
+- activeRegionalListings: ${regionalDemand.activeSupplyCount}
+- activeRegionalSupplyKg: ${regionalDemand.activeSupplyQuantity}
+- demandPressure: ${regionalDemand.demandPressure}
+
+Rules:
+- Keep recommendation aligned with current observed market trend.
+- Do not invent any price disconnected from the observed data.
+- Price range min <= recommended <= max.
+- Reasoning must be one short sentence.`;
+
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      contents: [{ parts: [{ text: prompt }] }],
+      generationConfig: {
+        responseMimeType: "application/json",
+      },
+    }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Gemini request failed: ${response.status} ${errorText}`);
+  }
+
+  const payload = await response.json();
+  const text =
+    payload?.candidates?.[0]?.content?.parts
+      ?.map((part) => part?.text || "")
+      .join("\n") || "";
+
+  return parseGeminiJson(text);
+}
+
+export async function getPriceRecommendation({
+  milletType,
+  quantity,
+  location,
+  quality,
+  taluk,
+}) {
+  const db = getFirestore();
+  const safeQuantity = Number(quantity || 0);
+  const normalizedQuality = normalizeQuality(quality);
+
+  const baseSuggestion = await calculatePriceSuggestion({
+    milletType,
+    quantity: safeQuantity,
+    location,
+    quality: normalizedQuality,
+    taluk,
+  });
+
+  const [recentMarketplacePrices, historicalTransactionPrices, regionalDemand] =
+    await Promise.all([
+      collectRecentMarketplacePrices(db, milletType, location, taluk),
+      collectHistoricalTransactionPrices(db, milletType, location, taluk),
+      calculateRegionalDemandSummary(db, milletType, location, taluk),
+    ]);
+
+  const externalMarketSignals = await collectExternalMarketSignals({
+    milletType,
+    location,
+    taluk,
+  });
+
+  const fallbackRecommendation = calculateHeuristicPriceRecommendation({
+    recentMarketplacePrices,
+    historicalTransactionPrices,
+    externalMarketPrices: externalMarketSignals.prices,
+    demandLevel: regionalDemand.demandLevel,
+    recentOrderQuantity: regionalDemand.recentOrderQuantity,
+    quantity: safeQuantity,
+  });
+
+  try {
+    const aiPayload = await requestGeminiPriceRecommendation({
+      listingInput: {
+        milletType,
+        quantity: safeQuantity,
+        location,
+        quality: normalizedQuality,
+        taluk,
+      },
+      baseSuggestedPrice: baseSuggestion.suggestedPrice,
+      recentMarketplacePrices,
+      historicalTransactionPrices,
+      externalMarketSignals,
+      regionalDemand,
+    });
+
+    const recommendation = sanitizePriceRecommendation(
+      aiPayload,
+      fallbackRecommendation,
+      safeQuantity,
+    );
+
+    return {
+      ...recommendation,
+      marketSignals: {
+        platformRecentAvgPricePerKg: recentMarketplacePrices.length
+          ? round2(average(recentMarketplacePrices))
+          : 0,
+        historicalTransactionAvgPricePerKg: historicalTransactionPrices.length
+          ? round2(average(historicalTransactionPrices))
+          : 0,
+        externalMarketAvgPricePerKg: externalMarketSignals.prices.length
+          ? round2(average(externalMarketSignals.prices))
+          : 0,
+        externalSources: externalMarketSignals.sources,
+      },
+    };
+  } catch (error) {
+    console.warn(
+      "Gemini price recommendation unavailable, using heuristic fallback:",
+      error.message,
+    );
+    return {
+      ...fallbackRecommendation,
+      marketSignals: {
+        platformRecentAvgPricePerKg: recentMarketplacePrices.length
+          ? round2(average(recentMarketplacePrices))
+          : 0,
+        historicalTransactionAvgPricePerKg: historicalTransactionPrices.length
+          ? round2(average(historicalTransactionPrices))
+          : 0,
+        externalMarketAvgPricePerKg: externalMarketSignals.prices.length
+          ? round2(average(externalMarketSignals.prices))
+          : 0,
+        externalSources: externalMarketSignals.sources,
+      },
+    };
+  }
 }
 
 export async function getSmartProductMatches(preferences) {
@@ -308,80 +1262,39 @@ export async function calculatePriceSuggestion({
   quantity,
   location,
   quality,
+  taluk,
 }) {
   const db = getFirestore();
 
   try {
-    // Step 1: Get base price
-    const basePrice = BASE_PRICES[milletType] || 45;
+    const [
+      recentMarketplacePrices,
+      historicalTransactionPrices,
+      regionalDemand,
+    ] = await Promise.all([
+      collectRecentMarketplacePrices(db, milletType, location, taluk),
+      collectHistoricalTransactionPrices(db, milletType, location, taluk),
+      calculateRegionalDemandSummary(db, milletType, location, taluk),
+    ]);
 
-    // Step 2: Apply location factor
-    const locationFactor =
-      LOCATION_FACTORS[location] || LOCATION_FACTORS["Other"];
+    const externalMarketSignals = await collectExternalMarketSignals({
+      milletType,
+      location,
+      taluk,
+    });
 
-    // Step 3: Apply quality factor
-    const qualityFactor =
-      QUALITY_FACTORS[quality] || QUALITY_FACTORS["Standard"];
+    const observedPrices = [
+      ...recentMarketplacePrices,
+      ...historicalTransactionPrices,
+      ...externalMarketSignals.prices,
+    ].filter((price) => price > 0);
 
-    // Step 4: Calculate bulk discount
-    // Larger quantities get small discount (encourages bulk buying)
-    let bulkDiscount = 0;
-    if (quantity > 100) bulkDiscount = 0.05; // 5% discount
-    if (quantity > 500) bulkDiscount = 0.08; // 8% discount
-    if (quantity > 1000) bulkDiscount = 0.1; // 10% discount
-
-    // Step 5: Get historical price data for seasonal adjustment
-    // Prefer indexed query, fallback to in-memory processing if index is unavailable.
-    let recentPrices = [];
-    try {
-      const priceHistory = await db
-        .collection(Collections.PRICE_HISTORY)
-        .where("milletType", "==", milletType)
-        .orderBy("timestamp", "desc")
-        .limit(30)
-        .get();
-
-      recentPrices = priceHistory.docs
-        .map((doc) => Number(doc.data().price || 0))
-        .filter((price) => price > 0);
-    } catch {
-      const fallbackHistory = await db
-        .collection(Collections.PRICE_HISTORY)
-        .get();
-      recentPrices = fallbackHistory.docs
-        .map((doc) => doc.data())
-        .filter((item) => item.milletType === milletType)
-        .sort((a, b) => {
-          const timeA = toDateSafe(a.timestamp)?.getTime() || 0;
-          const timeB = toDateSafe(b.timestamp)?.getTime() || 0;
-          return timeB - timeA;
-        })
-        .slice(0, 30)
-        .map((item) => Number(item.price || 0))
-        .filter((price) => price > 0);
+    if (!observedPrices.length) {
+      throw new Error("Insufficient market data to generate price suggestion");
     }
 
-    let seasonalFactor = 1.0;
-    if (recentPrices.length > 0) {
-      // Calculate average price trend from last 30 days
-      const avgRecentPrice = average(recentPrices);
-
-      // If recent prices are higher than base, increase seasonal factor
-      seasonalFactor = avgRecentPrice / basePrice;
-
-      // Cap seasonal variation between 0.9 and 1.15
-      seasonalFactor = Math.max(0.9, Math.min(1.15, seasonalFactor));
-    }
-
-    // Final price calculation
-    let suggestedPrice =
-      basePrice * locationFactor * qualityFactor * seasonalFactor;
-    suggestedPrice = suggestedPrice * (1 - bulkDiscount);
-
-    // Round to 2 decimal places
-    suggestedPrice = Math.round(suggestedPrice * 100) / 100;
-
-    // Calculate total cost
+    const stats = summarizePriceSeries(observedPrices);
+    const suggestedPrice = stats.median || stats.average;
     const totalCost = suggestedPrice * quantity;
 
     return {
@@ -390,19 +1303,29 @@ export async function calculatePriceSuggestion({
       quantity,
       location,
       quality,
-      suggestedPrice,
+      suggestedPrice: round2(suggestedPrice),
       totalCost: Math.round(totalCost * 100) / 100,
       priceBreakdown: {
-        basePrice,
-        locationFactor,
-        qualityFactor,
-        bulkDiscount: `${bulkDiscount * 100}%`,
-        seasonalFactor: Math.round(seasonalFactor * 100) / 100,
+        observedSamples: stats.count,
+        observedMedianPricePerKg: stats.median,
+        observedAveragePricePerKg: stats.average,
+        observedRange: {
+          min: stats.q25 || stats.min,
+          max: stats.q75 || stats.max,
+        },
+        platformRecentAvgPricePerKg: recentMarketplacePrices.length
+          ? round2(average(recentMarketplacePrices))
+          : 0,
+        historicalTransactionAvgPricePerKg: historicalTransactionPrices.length
+          ? round2(average(historicalTransactionPrices))
+          : 0,
+        externalMarketAvgPricePerKg: externalMarketSignals.prices.length
+          ? round2(average(externalMarketSignals.prices))
+          : 0,
+        demandPressure: regionalDemand.demandPressure,
       },
       recommendation:
-        quantity > 100
-          ? "Bulk discount applied - Good deal for large quantities!"
-          : "Consider ordering in bulk (>100kg) for better pricing",
+        "Derived from observed platform, transaction, and public market price trends.",
       timestamp: new Date().toISOString(),
     };
   } catch (error) {
@@ -447,9 +1370,13 @@ export async function forecastDemand({ location, period }) {
 
     const ordersSnapshot = await db.collection(Collections.ORDERS).get();
     const listingsSnapshot = await db.collection("listings").get();
+    const priceHistorySnapshot = await db
+      .collection(Collections.PRICE_HISTORY)
+      .get();
 
     const allOrders = ordersSnapshot.docs.map((doc) => doc.data());
     const allListings = listingsSnapshot.docs.map((doc) => doc.data());
+    const allPriceHistory = priceHistorySnapshot.docs.map((doc) => doc.data());
 
     const filteredOrders = allOrders.filter((order) => {
       const orderDate = toDateSafe(order.createdAt || order.orderDate);
@@ -467,11 +1394,13 @@ export async function forecastDemand({ location, period }) {
     const dayMs = 1000 * 60 * 60 * 24;
 
     const milletSet = new Set([
-      ...Object.keys(BASE_PRICES),
       ...filteredOrders
         .map((order) => order.milletType || order.productName)
         .filter(Boolean),
       ...allListings.map((listing) => listing.milletType).filter(Boolean),
+      ...allPriceHistory
+        .map((item) => item.milletType || item.commodity)
+        .filter(Boolean),
     ]);
 
     const forecast = [...milletSet].map((milletType) => {
@@ -516,13 +1445,18 @@ export async function forecastDemand({ location, period }) {
       const prices = milletListings
         .map((listing) => Number(listing.pricePerKg || 0))
         .filter((price) => price > 0);
+      const historicalPrices = allPriceHistory
+        .filter((item) => (item.milletType || item.commodity) === milletType)
+        .map((item) => Number(item.price || item.modal_price || 0))
+        .filter((price) => price > 0);
 
-      const basePrice = BASE_PRICES[milletType] || 45;
       const currentPrice = prices.length
         ? Number(average(prices).toFixed(2))
-        : basePrice;
+        : historicalPrices.length
+          ? Number(average(historicalPrices).toFixed(2))
+          : 0;
       const volatility =
-        prices.length > 1
+        prices.length > 1 && currentPrice > 0
           ? Number(((stdDev(prices) / currentPrice) * 100).toFixed(2))
           : 0;
 

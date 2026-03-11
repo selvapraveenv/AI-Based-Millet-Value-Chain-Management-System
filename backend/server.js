@@ -135,6 +135,7 @@ app.listen(PORT, () => {
   console.log("Available endpoints:");
   console.log("  POST /api/ai/smart-match");
   console.log("  POST /api/ai/price-suggestion");
+  console.log("  POST /api/ai/price-recommendation");
   console.log("  GET  /api/ai/demand-forecast");
   console.log("  POST /api/ai/quality-check");
   console.log("  POST /api/orders/update-status");

@@ -1,7 +1,7 @@
 ﻿"use client"
 
 import { useState, useEffect, useMemo } from "react"
-import { Plus, Edit, Trash2, Loader2, Package, CheckCircle, Clock, XCircle } from "lucide-react"
+import { Plus, Edit, Trash2, Loader2, Package, CheckCircle, Clock, XCircle, Sparkles } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -16,6 +16,17 @@ import { buildBackendUrl } from "@/lib/api"
 const milletTypes = ["Finger Millet (Ragi)", "Pearl Millet (Bajra)", "Foxtail Millet", "Barnyard Millet", "Little Millet", "Kodo Millet", "Proso Millet", "Sorghum (Jowar)"]
 const taluks = ["Avinashi", "Palladam", "Udumalaipettai", "Dharapuram", "Kangeyam", "Madathukulam", "Uthukuli", "Erode", "Perundurai", "Gobi", "Sathyamangalam", "Bhavani", "Anthiyur", "Kodumudi", "Modakurichi", "Nambiyur", "Thalavadi"]
 
+type AIPriceRecommendation = {
+  recommendedPricePerKg: number
+  suggestedPriceRange: {
+    min: number
+    max: number
+  }
+  demandLevel: "High" | "Medium" | "Low"
+  expectedSaleTime: string
+  reasoning: string
+}
+
 export default function FarmerListings() {
   const [listings, setListings] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
@@ -25,6 +36,9 @@ export default function FarmerListings() {
   const [editForm, setEditForm] = useState({ quantity: "", price: "" })
   const [editError, setEditError] = useState("")
   const [newListing, setNewListing] = useState({ type: "", quantity: "", location: "", price: "", taluk: "", harvestDate: "" })
+  const [aiLoading, setAiLoading] = useState(false)
+  const [aiError, setAiError] = useState("")
+  const [aiRecommendation, setAiRecommendation] = useState<AIPriceRecommendation | null>(null)
 
   const user = useMemo(() => getLoggedInUser(), [])
 
@@ -52,6 +66,54 @@ export default function FarmerListings() {
     }
     fetchData()
   }, [user?.id])
+
+  const updateNewListing = (patch: Partial<typeof newListing>) => {
+    setNewListing((prev) => ({ ...prev, ...patch }))
+    if (aiRecommendation) setAiRecommendation(null)
+    if (aiError) setAiError("")
+  }
+
+  const handleGetAiPriceSuggestion = async () => {
+    if (!newListing.type || !newListing.quantity || !newListing.location) {
+      setAiError("Select millet type, quantity, and location to get AI pricing.")
+      return
+    }
+
+    try {
+      setAiLoading(true)
+      setAiError("")
+
+      const response = await fetch(buildBackendUrl("/api/ai/price-recommendation"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          milletType: newListing.type,
+          quantity: Number(newListing.quantity),
+          location: newListing.location,
+          taluk: newListing.taluk,
+          quality: "Standard",
+        }),
+      })
+
+      const payload = await response.json()
+      if (!response.ok) {
+        throw new Error(payload?.message || payload?.error || "Failed to fetch AI recommendation")
+      }
+
+      setAiRecommendation(payload)
+    } catch (error: any) {
+      setAiRecommendation(null)
+      setAiError(error?.message || "Unable to get AI recommendation right now.")
+    } finally {
+      setAiLoading(false)
+    }
+  }
+
+  const applyRecommendedPrice = () => {
+    if (!aiRecommendation) return
+    setNewListing((prev) => ({ ...prev, price: String(aiRecommendation.recommendedPricePerKg) }))
+    setAiError("")
+  }
 
   const handleAddListing = async () => {
     if (!user) {
@@ -99,6 +161,8 @@ export default function FarmerListings() {
         }
         setListings([added, ...listings])
         setNewListing({ type: "", quantity: "", location: "", price: "", taluk: "", harvestDate: "" })
+        setAiRecommendation(null)
+        setAiError("")
         setIsDialogOpen(false)
       } catch (error) {
         console.error("Error creating listing:", error)
@@ -217,26 +281,67 @@ export default function FarmerListings() {
             <div className="space-y-3 py-3">
               <div className="space-y-2">
                 <Label>Millet Type</Label>
-                <Select value={newListing.type} onValueChange={(v) => setNewListing({ ...newListing, type: v })}>
+                <Select value={newListing.type} onValueChange={(v) => updateNewListing({ type: v })}>
                   <SelectTrigger className="h-9"><SelectValue placeholder="Select millet type" /></SelectTrigger>
                   <SelectContent>{milletTypes.map((t) => <SelectItem key={t} value={t}>{t}</SelectItem>)}</SelectContent>
                 </Select>
               </div>
               <div className="grid gap-3 sm:grid-cols-2">
-                <div className="space-y-2"><Label>Quantity (kg)</Label><Input className="h-9" type="number" placeholder="Enter quantity" value={newListing.quantity} onChange={(e) => setNewListing({ ...newListing, quantity: e.target.value })} /></div>
-                <div className="space-y-2"><Label>Price per kg (Rs)</Label><Input className="h-9" type="number" placeholder="Enter price" value={newListing.price} onChange={(e) => setNewListing({ ...newListing, price: e.target.value })} /></div>
+                <div className="space-y-2"><Label>Quantity (kg)</Label><Input className="h-9" type="number" placeholder="Enter quantity" value={newListing.quantity} onChange={(e) => updateNewListing({ quantity: e.target.value })} /></div>
+                <div className="space-y-2"><Label>Price per kg (Rs)</Label><Input className="h-9" type="number" placeholder="Enter price" value={newListing.price} onChange={(e) => updateNewListing({ price: e.target.value })} /></div>
               </div>
               <div className="grid gap-3 sm:grid-cols-2">
-                <div className="space-y-2"><Label>Location</Label><Input className="h-9" placeholder="Your location" value={newListing.location} onChange={(e) => setNewListing({ ...newListing, location: e.target.value })} /></div>
+                <div className="space-y-2"><Label>Location</Label><Input className="h-9" placeholder="Your location" value={newListing.location} onChange={(e) => updateNewListing({ location: e.target.value })} /></div>
                 <div className="space-y-2">
                   <Label>Taluk</Label>
-                  <Select value={newListing.taluk} onValueChange={(v) => setNewListing({ ...newListing, taluk: v })}>
+                  <Select value={newListing.taluk} onValueChange={(v) => updateNewListing({ taluk: v })}>
                     <SelectTrigger className="h-9"><SelectValue placeholder="Select taluk" /></SelectTrigger>
                     <SelectContent>{taluks.map((t) => <SelectItem key={t} value={t}>{t}</SelectItem>)}</SelectContent>
                   </Select>
                 </div>
               </div>
-              <div className="space-y-2"><Label>Harvest Date</Label><Input className="h-9" type="date" value={newListing.harvestDate} onChange={(e) => setNewListing({ ...newListing, harvestDate: e.target.value })} max={new Date().toISOString().split('T')[0]} /></div>
+              <div className="space-y-2"><Label>Harvest Date</Label><Input className="h-9" type="date" value={newListing.harvestDate} onChange={(e) => updateNewListing({ harvestDate: e.target.value })} max={new Date().toISOString().split('T')[0]} /></div>
+
+              <Button
+                variant="outline"
+                onClick={handleGetAiPriceSuggestion}
+                disabled={aiLoading || !newListing.type || !newListing.quantity || !newListing.location}
+                className="w-full"
+              >
+                {aiLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
+                Get AI Price Suggestion
+              </Button>
+
+              {aiError && <p className="text-sm text-destructive">{aiError}</p>}
+
+              {aiRecommendation && (
+                <Card className="border-primary/30 bg-primary/5">
+                  <CardContent className="pt-4 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <p className="font-semibold text-foreground">AI Recommendation</p>
+                      <Badge className={aiRecommendation.demandLevel === "High" ? "bg-green-100 text-green-700 border border-green-300" : aiRecommendation.demandLevel === "Low" ? "bg-red-100 text-red-700 border border-red-300" : "bg-yellow-100 text-yellow-700 border border-yellow-300"}>
+                        Demand: {aiRecommendation.demandLevel}
+                      </Badge>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3 text-sm">
+                      <div>
+                        <p className="text-muted-foreground">Recommended</p>
+                        <p className="font-semibold text-primary">Rs {aiRecommendation.recommendedPricePerKg}/kg</p>
+                      </div>
+                      <div>
+                        <p className="text-muted-foreground">Suggested range</p>
+                        <p className="font-semibold text-foreground">Rs {aiRecommendation.suggestedPriceRange.min} - {aiRecommendation.suggestedPriceRange.max}</p>
+                      </div>
+                    </div>
+                    <p className="text-sm text-muted-foreground">Expected sale time: {aiRecommendation.expectedSaleTime}</p>
+                    <p className="text-sm text-foreground">{aiRecommendation.reasoning}</p>
+                    <Button type="button" onClick={applyRecommendedPrice} className="w-full">
+                      Use Recommended Price
+                    </Button>
+                  </CardContent>
+                </Card>
+              )}
+
               <Button onClick={handleAddListing} className="w-full">Add Listing</Button>
             </div>
           </DialogContent>
